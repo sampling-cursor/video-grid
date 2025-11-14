@@ -26,10 +26,10 @@ type PlaybackState = {
 }
 
 const GRID_PADDING_PERCENT = '177.78%'
-const MIN_GRID_ROWS = 1
-const MAX_GRID_ROWS = 24
-const MIN_GRID_COLUMNS = 1
-const MAX_GRID_COLUMNS = 12
+const GRID_ASPECT_WIDTH = 9
+const GRID_ASPECT_HEIGHT = 16
+const MIN_GRID_SCALE = 1
+const MAX_GRID_SCALE = 4
 const VISIBLE_POINT_WINDOW = 1.5
 
 const DEFAULT_VIDEO_IDS = ['tVlzKzKXjRw', 'aqz-KE-bpKQ', 'M7lc1UVf-VE']
@@ -99,8 +99,7 @@ function App() {
   const [videos, setVideos] = useState<VideoTrack[]>(
     DEFAULT_VIDEO_IDS.map((id) => createVideoTrack(id, `https://www.youtube.com/watch?v=${id}`)),
   )
-  const [rows, setRows] = useState(24)
-  const [columns, setColumns] = useState(12)
+  const [gridScale, setGridScale] = useState(1)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
   const [videoInput, setVideoInput] = useState('')
   const [videoError, setVideoError] = useState<string | null>(null)
@@ -130,6 +129,9 @@ function App() {
     }),
     [],
   )
+
+  const rows = useMemo(() => GRID_ASPECT_HEIGHT * gridScale, [gridScale])
+  const columns = useMemo(() => GRID_ASPECT_WIDTH * gridScale, [gridScale])
 
   const gridTemplateStyle = useMemo(
     () => ({
@@ -343,22 +345,39 @@ function App() {
     [],
   )
 
-  const handleDimensionChange = useCallback(
-    (
-      setter: React.Dispatch<React.SetStateAction<number>>,
-      min: number,
-      max: number,
-    ) =>
-      (event: React.ChangeEvent<HTMLInputElement>) => {
-        const value = Number.parseInt(event.target.value, 10)
-        if (Number.isNaN(value)) {
-          return
-        }
-
-        const clamped = Math.min(max, Math.max(min, value))
-        setter(clamped)
-      },
+  const clampGridScale = useCallback(
+    (scale: number) => Math.min(MAX_GRID_SCALE, Math.max(MIN_GRID_SCALE, scale)),
     [],
+  )
+
+  const handleRowsChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const value = Number.parseInt(event.target.value, 10)
+      if (Number.isNaN(value)) {
+        return
+      }
+
+      const nextScale = clampGridScale(
+        Math.max(MIN_GRID_SCALE, Math.round(value / GRID_ASPECT_HEIGHT)),
+      )
+      setGridScale(nextScale)
+    },
+    [clampGridScale],
+  )
+
+  const handleColumnsChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const value = Number.parseInt(event.target.value, 10)
+      if (Number.isNaN(value)) {
+        return
+      }
+
+      const nextScale = clampGridScale(
+        Math.max(MIN_GRID_SCALE, Math.round(value / GRID_ASPECT_WIDTH)),
+      )
+      setGridScale(nextScale)
+    },
+    [clampGridScale],
   )
 
   const logVideoPoints = useCallback((videoKey: string, points: PointOfInterest[]) => {
@@ -728,10 +747,11 @@ function App() {
                 <span className="field__label">Rows</span>
                 <input
                   type="number"
-                  min={MIN_GRID_ROWS}
-                  max={MAX_GRID_ROWS}
+                  min={GRID_ASPECT_HEIGHT * MIN_GRID_SCALE}
+                  max={GRID_ASPECT_HEIGHT * MAX_GRID_SCALE}
+                  step={GRID_ASPECT_HEIGHT}
                   value={rows}
-                  onChange={handleDimensionChange(setRows, MIN_GRID_ROWS, MAX_GRID_ROWS)}
+                  onChange={handleRowsChange}
                   className="field__input"
                 />
               </label>
@@ -739,14 +759,11 @@ function App() {
                 <span className="field__label">Columns</span>
                 <input
                   type="number"
-                  min={MIN_GRID_COLUMNS}
-                  max={MAX_GRID_COLUMNS}
+                  min={GRID_ASPECT_WIDTH * MIN_GRID_SCALE}
+                  max={GRID_ASPECT_WIDTH * MAX_GRID_SCALE}
+                  step={GRID_ASPECT_WIDTH}
                   value={columns}
-                  onChange={handleDimensionChange(
-                    setColumns,
-                    MIN_GRID_COLUMNS,
-                    MAX_GRID_COLUMNS,
-                  )}
+                  onChange={handleColumnsChange}
                   className="field__input"
                 />
               </label>
