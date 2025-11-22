@@ -67,6 +67,31 @@
   gap: 0.35rem;
 }
 
+.video-card__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: flex-start;
+}
+
+.video-card__namespace {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.video-card__link {
+  font-size: 0.95rem;
+  color: #0ea5e9;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.video-card__link:hover,
+.video-card__link:focus-visible {
+  text-decoration: underline;
+}
+
 .video-card__status {
   font-size: 0.85rem;
   font-weight: 600;

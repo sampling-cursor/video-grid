@@ -17,6 +17,7 @@ type VideoTrack = {
   key: string
   videoId: string
   source: string
+  namespace?: string
   points: PointOfInterest[]
 }
 
@@ -33,6 +34,15 @@ const MAX_GRID_SCALE = 4
 const VISIBLE_POINT_WINDOW = 1.5
 
 const DEFAULT_VIDEO_IDS = ['tVlzKzKXjRw', 'aqz-KE-bpKQ', 'M7lc1UVf-VE']
+const GRAPH_SOCKET_URL =
+  'wss://ungallant-unimpeding-kade.ngrok-free.dev/0000000e9894eb8fe2c8c5f330ff78210eb909bc683a2fe89a9e2233fabf5354'
+const GRAPH_SOCKET_PROTOCOLS = ['consequence.1']
+const GRAPH_REQUEST_BODY = {
+  type: 'get_graph',
+  body: {
+    public_key: '0000000000000000000000000000000000000000000=',
+  },
+}
 
 const extractVideoId = (value: string): string | null => {
   const trimmed = value.trim()
@@ -85,14 +95,47 @@ const formatTimecode = (seconds: number): string => {
   return `${minutes}:${paddedSeconds}.${paddedMilliseconds}`
 }
 
-const createVideoTrack = (videoId: string, source: string): VideoTrack => {
+const createVideoTrack = (videoId: string, source: string, namespace?: string): VideoTrack => {
   const keyBase = crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)
   return {
     key: `video-${keyBase}`,
     videoId,
     source,
+    namespace,
     points: [],
   }
+}
+
+const parseGraphVideos = (dotGraph: string): VideoTrack[] => {
+  const nodes = Array.from(dotGraph.matchAll(/"[^"]+"\s*\[(.*?)\];/g)).map((match) => {
+    const attributes = match[1]
+    const parsedAttributes: Record<string, string> = {}
+
+    for (const attribute of attributes.matchAll(/(\w+)="([^"]*)"/g)) {
+      const [, key, value] = attribute
+      parsedAttributes[key] = value
+    }
+
+    return parsedAttributes
+  })
+
+  const tracks: VideoTrack[] = []
+
+  nodes.forEach((node) => {
+    const namespace = node.namespace?.trim()
+    const memo = node.memo?.trim()
+
+    if (!namespace || !memo) {
+      return
+    }
+
+    const videoId = extractVideoId(memo)
+    if (videoId) {
+      tracks.push(createVideoTrack(videoId, memo, namespace))
+    }
+  })
+
+  return tracks
 }
 
 function App() {
@@ -345,6 +388,36 @@ function App() {
     [],
   )
 
+  useEffect(() => {
+    const socket = new WebSocket(GRAPH_SOCKET_URL, GRAPH_SOCKET_PROTOCOLS)
+
+    socket.addEventListener('open', () => {
+      socket.send(JSON.stringify(GRAPH_REQUEST_BODY))
+    })
+
+    socket.addEventListener('message', (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data?.type === 'graph' && typeof data.body?.graph === 'string') {
+          const graphVideos = parseGraphVideos(data.body.graph)
+          if (graphVideos.length) {
+            setVideos(graphVideos)
+          }
+        }
+      } catch (error) {
+        console.error('Error parsing graph message', error)
+      }
+    })
+
+    socket.addEventListener('error', (event) => {
+      console.error('WebSocket error', event)
+    })
+
+    return () => {
+      socket.close()
+    }
+  }, [])
+
   const clampGridScale = useCallback(
     (scale: number) => Math.min(MAX_GRID_SCALE, Math.max(MIN_GRID_SCALE, scale)),
     [],
@@ -581,10 +654,22 @@ function App() {
               }
             >
               <div className="video-card__meta">
+                <div className="video-card__heading">
+                  {video.namespace ? (
+                    <span className="video-card__namespace">{video.namespace}</span>
+                  ) : null}
+                  <a
+                    className="video-card__link"
+                    href={video.source}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {video.source}
+                  </a>
+                </div>
                 <span className="video-card__status">
                   {activeVideoKey === video.key ? 'Now playing' : 'Paused'}
                 </span>
-                <span className="video-card__source">{video.source}</span>
               </div>
 
               <div className="video-stage">
