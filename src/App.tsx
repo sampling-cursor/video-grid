@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Buffer } from 'buffer'
 import * as bip39 from 'bip39'
 import { hmac } from '@noble/hashes/hmac.js'
 import { sha512 } from '@noble/hashes/sha2.js'
@@ -59,6 +58,14 @@ const GRAPH_REQUEST_BODY = {
 const NUM_TAG_ACCOUNTS = GRID_ASPECT_HEIGHT
 const NUM_TAG_ADDRESSES = GRID_ASPECT_WIDTH
 
+const toBase64 = (bytes: Uint8Array): string =>
+  btoa(String.fromCharCode(...bytes))
+
+const toHex = (bytes: Uint8Array): string =>
+  Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+
 // Simple HMAC-SHA512 HD key derivation
 const deriveHDSeed = (seed: Uint8Array, account: number, address: number): Uint8Array => {
   const label = new TextEncoder().encode('necessitated/premises')
@@ -74,14 +81,14 @@ const generateHDKeypair = (mnemonic: string, account: number, address: number) =
   const keypair = nacl.sign.keyPair.fromSeed(derivedSeed)
   return {
     path: `m/${account}/${address}`,
-    publicKey: Buffer.from(keypair.publicKey).toString('base64'),
+    publicKey: toBase64(keypair.publicKey),
   }
 }
 
 const generateMnemonic = (passphrase: string): string => {
   const hash = sha512(utf8ToBytes(passphrase))
   const entropy = hash.slice(0, 32)
-  return bip39.entropyToMnemonic(Buffer.from(entropy).toString('hex'))
+  return bip39.entropyToMnemonic(toHex(entropy))
 }
 
 const buildKeyGrid = (mnemonic: string, accounts: number, addresses: number) =>
