@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import * as bip39 from 'bip39'
+import { entropyToMnemonic, mnemonicToSeedSync } from '@scure/bip39'
+import { wordlist } from '@scure/bip39/wordlists/english.js'
 import { hmac } from '@noble/hashes/hmac.js'
 import { sha512 } from '@noble/hashes/sha2.js'
 import { utf8ToBytes } from '@noble/hashes/utils.js'
@@ -61,11 +62,6 @@ const NUM_TAG_ADDRESSES = GRID_ASPECT_WIDTH
 const toBase64 = (bytes: Uint8Array): string =>
   btoa(String.fromCharCode(...bytes))
 
-const toHex = (bytes: Uint8Array): string =>
-  Array.from(bytes)
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('')
-
 // Simple HMAC-SHA512 HD key derivation
 const deriveHDSeed = (seed: Uint8Array, account: number, address: number): Uint8Array => {
   const label = new TextEncoder().encode('necessitated/premises')
@@ -76,7 +72,7 @@ const deriveHDSeed = (seed: Uint8Array, account: number, address: number): Uint8
 }
 
 const generateHDKeypair = (mnemonic: string, account: number, address: number) => {
-  const masterSeed = bip39.mnemonicToSeedSync(mnemonic)
+  const masterSeed = mnemonicToSeedSync(mnemonic)
   const derivedSeed = deriveHDSeed(new Uint8Array(masterSeed), account, address)
   const keypair = nacl.sign.keyPair.fromSeed(derivedSeed)
   return {
@@ -88,7 +84,7 @@ const generateHDKeypair = (mnemonic: string, account: number, address: number) =
 const generateMnemonic = (passphrase: string): string => {
   const hash = sha512(utf8ToBytes(passphrase))
   const entropy = hash.slice(0, 32)
-  return bip39.entropyToMnemonic(toHex(entropy))
+  return entropyToMnemonic(entropy, wordlist)
 }
 
 const buildKeyGrid = (mnemonic: string, accounts: number, addresses: number) =>
