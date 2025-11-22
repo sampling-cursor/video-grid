@@ -1,4 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Buffer } from 'buffer'
+import * as bip39 from 'bip39'
+import { hmac } from '@noble/hashes/hmac'
+import { sha512 } from '@noble/hashes/sha2'
+import { utf8ToBytes } from '@noble/hashes/utils'
+import nacl from 'tweetnacl'
 import YouTube from 'react-youtube'
 import type { YouTubeEvent, YouTubePlayer } from 'react-youtube'
 import './App.css'
@@ -19,6 +25,12 @@ type VideoTrack = {
   source: string
   namespace?: string
   points: PointOfInterest[]
+}
+
+type GraphNode = {
+  namespace?: string
+  memo?: string
+  pubkey?: string
 }
 
 type PlaybackState = {
@@ -43,6 +55,64 @@ const GRAPH_REQUEST_BODY = {
     public_key: '0000000000000000000000000000000000000000000=',
   },
 }
+
+const NUM_TAG_ACCOUNTS = GRID_ASPECT_HEIGHT
+const NUM_TAG_ADDRESSES = GRID_ASPECT_WIDTH
+
+// Simple HMAC-SHA512 HD key derivation
+const deriveHDSeed = (seed: Uint8Array, account: number, address: number): Uint8Array => {
+  const label = new TextEncoder().encode('necessitated/premises')
+  const indexBytes = new Uint8Array([account, address])
+  const input = new Uint8Array([...seed, ...indexBytes])
+  const digest = hmac(sha512, label, input)
+  return digest.slice(0, 32)
+}
+
+const generateHDKeypair = (mnemonic: string, account: number, address: number) => {
+  const masterSeed = bip39.mnemonicToSeedSync(mnemonic)
+  const derivedSeed = deriveHDSeed(new Uint8Array(masterSeed), account, address)
+  const keypair = nacl.sign.keyPair.fromSeed(derivedSeed)
+  return {
+    path: `m/${account}/${address}`,
+    publicKey: Buffer.from(keypair.publicKey).toString('base64'),
+  }
+}
+
+const generateMnemonic = (passphrase: string): string => {
+  const hash = sha512(utf8ToBytes(passphrase))
+  const entropy = hash.slice(0, 32)
+  return bip39.entropyToMnemonic(Buffer.from(entropy).toString('hex'))
+}
+
+const buildKeyGrid = (mnemonic: string, accounts: number, addresses: number) =>
+  Array.from({ length: accounts }).flatMap((_, accountIndex) =>
+    Array.from({ length: addresses }).map((__, addressIndex) => ({
+      accountIndex,
+      addressIndex,
+      ...generateHDKeypair(mnemonic, accountIndex, addressIndex),
+    })),
+  )
+
+const publicKeyForNamespace = (namespace: string): string => {
+  const mnemonic = generateMnemonic(namespace)
+  return generateHDKeypair(mnemonic, 0, 0).publicKey
+}
+
+const keyGridForSecond = (namespace: string, second: number) =>
+  buildKeyGrid(generateMnemonic(`${namespace}/T+${second}s`), NUM_TAG_ACCOUNTS, NUM_TAG_ADDRESSES)
+
+const parseGraphNodes = (dotGraph: string): GraphNode[] =>
+  Array.from(dotGraph.matchAll(/"[^"]+"\s*\[(.*?)\];/g)).map((match) => {
+    const attributes = match[1]
+    const parsedAttributes: Record<string, string> = {}
+
+    for (const attribute of attributes.matchAll(/(\w+)="([^"]*)"/g)) {
+      const [, key, value] = attribute
+      parsedAttributes[key] = value
+    }
+
+    return parsedAttributes
+  })
 
 const extractVideoId = (value: string): string | null => {
   const trimmed = value.trim()
@@ -75,7 +145,7 @@ const extractVideoId = (value: string): string | null => {
         return potentialId
       }
     }
-  } catch (error) {
+  } catch {
     // Ignore invalid URL parsing errors.
   }
 
@@ -106,36 +176,118 @@ const createVideoTrack = (videoId: string, source: string, namespace?: string): 
   }
 }
 
-const parseGraphVideos = (dotGraph: string): VideoTrack[] => {
-  const nodes = Array.from(dotGraph.matchAll(/"[^"]+"\s*\[(.*?)\];/g)).map((match) => {
-    const attributes = match[1]
-    const parsedAttributes: Record<string, string> = {}
+const parseGraphVideos = (dotGraph: string): VideoTrack[] =>
+  parseGraphNodes(dotGraph)
+    .map((node) => ({ namespace: node.namespace?.trim(), memo: node.memo?.trim() }))
+    .filter((node): node is { namespace: string; memo: string } => Boolean(node.namespace && node.memo))
+    .reduce<VideoTrack[]>((tracks, { namespace, memo }) => {
+      const videoId = extractVideoId(memo)
+      if (videoId) {
+        tracks.push(createVideoTrack(videoId, memo, namespace))
+      }
+      return tracks
+    }, [])
 
-    for (const attribute of attributes.matchAll(/(\w+)="([^"]*)"/g)) {
-      const [, key, value] = attribute
-      parsedAttributes[key] = value
+const requestGraph = (publicKey: string, signal?: AbortSignal): Promise<string | null> =>
+  new Promise((resolve) => {
+    let isSettled = false
+    const socket = new WebSocket(GRAPH_SOCKET_URL, GRAPH_SOCKET_PROTOCOLS)
+
+    const settle = (graph: string | null) => {
+      if (isSettled) {
+        return
+      }
+      isSettled = true
+      resolve(graph)
+      socket.close()
     }
 
-    return parsedAttributes
+    const abortListener = () => settle(null)
+    signal?.addEventListener('abort', abortListener, { once: true })
+
+    socket.addEventListener('open', () => {
+      socket.send(
+        JSON.stringify({
+          ...GRAPH_REQUEST_BODY,
+          body: {
+            ...GRAPH_REQUEST_BODY.body,
+            public_key: publicKey,
+          },
+        }),
+      )
+    })
+
+    socket.addEventListener('message', (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data?.type === 'graph' && typeof data.body?.graph === 'string') {
+          settle(data.body.graph)
+        }
+      } catch (error) {
+        console.error('Error parsing graph message', error)
+      }
+    })
+
+    socket.addEventListener('error', (event) => {
+      console.error('WebSocket error', event)
+      settle(null)
+    })
+
+    socket.addEventListener('close', () => {
+      settle(null)
+    })
   })
 
-  const tracks: VideoTrack[] = []
+const pointPositionPercent = (index: number, total: number) => ((index + 0.5) / total) * 100
 
+const correlateGraphTags = (
+  namespace: string,
+  durationSeconds: number,
+  nodes: GraphNode[],
+): PointOfInterest[] => {
+  const pubkeyToMemo = new Map<string, string>()
   nodes.forEach((node) => {
-    const namespace = node.namespace?.trim()
-    const memo = node.memo?.trim()
-
-    if (!namespace || !memo) {
-      return
-    }
-
-    const videoId = extractVideoId(memo)
-    if (videoId) {
-      tracks.push(createVideoTrack(videoId, memo, namespace))
+    if (node.pubkey) {
+      pubkeyToMemo.set(node.pubkey.trim(), node.memo?.trim() ?? '')
     }
   })
 
-  return tracks
+  if (!pubkeyToMemo.size) {
+    return []
+  }
+
+  const points: PointOfInterest[] = []
+
+  for (let second = 0; second <= durationSeconds; second += 1) {
+    const keyGrid = keyGridForSecond(namespace, second)
+    keyGrid.forEach(({ accountIndex, addressIndex, publicKey }) => {
+      const memo = pubkeyToMemo.get(publicKey)
+      if (!memo) {
+        return
+      }
+
+      const column = addressIndex + 1
+      const row = accountIndex + 1
+
+      points.push({
+        id: `tag-${namespace}-${second}-${row}-${column}`,
+        time: second,
+        row,
+        column,
+        xPercent: pointPositionPercent(addressIndex, NUM_TAG_ADDRESSES),
+        yPercent: pointPositionPercent(accountIndex, NUM_TAG_ACCOUNTS),
+        note: memo,
+      })
+
+      pubkeyToMemo.delete(publicKey)
+    })
+
+    if (!pubkeyToMemo.size) {
+      break
+    }
+  }
+
+  return points.sort((a, b) => a.time - b.time)
 }
 
 function App() {
@@ -152,10 +304,13 @@ function App() {
     pointId: string
   } | null>(null)
   const [playbackStates, setPlaybackStates] = useState<Record<string, PlaybackState>>({})
+  const [graphVersion, setGraphVersion] = useState(0)
 
   const containerRefs = useRef(new Map<string, HTMLDivElement | null>())
   const overlayRefs = useRef(new Map<string, HTMLDivElement | null>())
   const playerRefs = useRef(new Map<string, YouTubePlayer>())
+  const namespaceGraphs = useRef(new Map<string, GraphNode[]>())
+  const computedTagDurations = useRef(new Set<string>())
 
   const baseYouTubeOptions = useMemo(
     () => ({
@@ -389,34 +544,112 @@ function App() {
   )
 
   useEffect(() => {
-    const socket = new WebSocket(GRAPH_SOCKET_URL, GRAPH_SOCKET_PROTOCOLS)
+    let isActive = true
+    const controller = new AbortController()
 
-    socket.addEventListener('open', () => {
-      socket.send(JSON.stringify(GRAPH_REQUEST_BODY))
-    })
-
-    socket.addEventListener('message', (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        if (data?.type === 'graph' && typeof data.body?.graph === 'string') {
-          const graphVideos = parseGraphVideos(data.body.graph)
-          if (graphVideos.length) {
-            setVideos(graphVideos)
-          }
+    requestGraph(GRAPH_REQUEST_BODY.body.public_key, controller.signal)
+      .then((graph) => {
+        if (!isActive || !graph) {
+          return
         }
-      } catch (error) {
-        console.error('Error parsing graph message', error)
-      }
-    })
 
-    socket.addEventListener('error', (event) => {
-      console.error('WebSocket error', event)
+        const graphVideos = parseGraphVideos(graph)
+        if (graphVideos.length) {
+          setVideos(graphVideos)
+        }
+      })
+      .catch((error) => {
+        console.error('Error fetching video graph', error)
+      })
+
+    return () => {
+      isActive = false
+      controller.abort()
+    }
+  }, [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    videos.forEach((video) => {
+      if (!video.namespace || namespaceGraphs.current.has(video.namespace)) {
+        return
+      }
+
+      const graphKey = publicKeyForNamespace(video.namespace)
+      requestGraph(graphKey, controller.signal)
+        .then((graph) => {
+          if (!graph || controller.signal.aborted || !video.namespace) {
+            return
+          }
+
+          namespaceGraphs.current.set(video.namespace, parseGraphNodes(graph))
+          setGraphVersion((previous) => previous + 1)
+        })
+        .catch((error) => {
+          console.error(`Error fetching tag graph for namespace ${video.namespace}`, error)
+        })
     })
 
     return () => {
-      socket.close()
+      controller.abort()
     }
-  }, [])
+  }, [videos])
+
+  useEffect(() => {
+    computedTagDurations.current.clear()
+  }, [graphVersion])
+
+  useEffect(() => {
+    const updates: Record<string, PointOfInterest[]> = {}
+
+    videos.forEach((video) => {
+      if (!video.namespace) {
+        return
+      }
+
+      const nodes = namespaceGraphs.current.get(video.namespace)
+      if (!nodes?.length) {
+        return
+      }
+
+      const durationSeconds = Math.floor(playbackStates[video.key]?.duration ?? 0)
+      if (durationSeconds <= 0) {
+        return
+      }
+
+      const computeKey = `${video.key}:${durationSeconds}`
+      if (computedTagDurations.current.has(computeKey)) {
+        return
+      }
+
+      const tagPoints = correlateGraphTags(video.namespace, durationSeconds, nodes)
+      computedTagDurations.current.add(computeKey)
+      updates[video.key] = tagPoints
+    })
+
+    const updateKeys = Object.keys(updates)
+    if (!updateKeys.length) {
+      return
+    }
+
+    setVideos((previous) =>
+      previous.map((video) => {
+        const tagPoints = updates[video.key]
+        if (!tagPoints) {
+          return video
+        }
+
+        const manualPoints = video.points.filter((point) => !point.id.startsWith('tag-'))
+        const mergedPoints = [...tagPoints, ...manualPoints].sort((a, b) => a.time - b.time)
+
+        return {
+          ...video,
+          points: mergedPoints,
+        }
+      }),
+    )
+  }, [videos, playbackStates, graphVersion])
 
   const clampGridScale = useCallback(
     (scale: number) => Math.min(MAX_GRID_SCALE, Math.max(MIN_GRID_SCALE, scale)),
