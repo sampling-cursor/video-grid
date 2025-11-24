@@ -32,9 +32,15 @@ type GraphTag = {
   memo: string
 }
 
-const yieldToMainThread = () =>
+const waitForIdlePeriod = () =>
   new Promise<void>((resolve) => {
-    setTimeout(resolve, 0)
+    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+      ;(
+        window as Window & { requestIdleCallback: (callback: IdleRequestCallback) => number }
+      ).requestIdleCallback(() => resolve())
+    } else {
+      setTimeout(resolve, 16)
+    }
   })
 
 const GRID_PADDING_PERCENT = '177.78%'
@@ -218,44 +224,47 @@ const correlateGraphTagsToPoints = async (
   durationSeconds: number,
   tags: GraphTag[],
   videoKey: string,
+  signal?: AbortSignal,
 ): Promise<PointOfInterest[]> => {
   if (!tags.length || durationSeconds <= 0) {
     return []
   }
 
   const floorDuration = Math.max(0, Math.floor(durationSeconds))
-  const lookup = new Map<string, PointOfInterest>()
+  const taggedMemos = new Map(tags.map((tag) => [tag.publicKey, tag.memo]))
+  const points: PointOfInterest[] = []
 
   for (let second = 0; second <= floorDuration; second += 1) {
+    if (signal?.aborted) {
+      return []
+    }
+
     const gridForSecond = deriveKeyGridForSecond(namespace, second)
     gridForSecond.forEach((value, publicKey) => {
-      lookup.set(publicKey, {
+      const memo = taggedMemos.get(publicKey)
+      if (memo === undefined) {
+        return
+      }
+
+      taggedMemos.delete(publicKey)
+      points.push({
         id: `${videoKey}-${publicKey}`,
-        note: '',
+        note: memo,
         ...value,
       })
     })
 
-    if (second % 15 === 0) {
-      // Yield periodically so long-running correlations don't block the UI thread.
-      await yieldToMainThread()
+    if (!taggedMemos.size) {
+      break
+    }
+
+    if (second % 2 === 0) {
+      // Yield frequently so long-running correlations don't block the UI thread.
+      await waitForIdlePeriod()
     }
   }
 
-  return tags
-    .map((tag) => {
-      const point = lookup.get(tag.publicKey)
-      if (!point) {
-        return null
-      }
-
-      return {
-        ...point,
-        note: tag.memo,
-      }
-    })
-    .filter((value): value is PointOfInterest => Boolean(value))
-    .sort((first, second) => first.time - second.time)
+  return points.sort((first, second) => first.time - second.time)
 }
 
 const requestGraphForKey = async (publicKey: string, signal?: AbortSignal) =>
@@ -529,40 +538,41 @@ function App() {
 
     const loadTags = async () => {
       try {
-        await Promise.all(
-          pendingVideos.map(async (video) => {
-            if (!video.namespace || abortController.signal.aborted) {
-              return
-            }
+        for (const video of pendingVideos) {
+          if (!video.namespace || abortController.signal.aborted) {
+            return
+          }
 
-            const duration = playbackStates[video.key]?.duration ?? 0
-            const basePublicKey = deriveBasePublicKeyForNamespace(video.namespace)
-            const graph = await requestGraphForKey(basePublicKey, abortController.signal)
+          const duration = playbackStates[video.key]?.duration ?? 0
+          const basePublicKey = deriveBasePublicKeyForNamespace(video.namespace)
+          const graph = await requestGraphForKey(basePublicKey, abortController.signal)
 
-            if (!graph || abortController.signal.aborted) {
-              fetchedTagsRef.current.add(video.key)
-              return
-            }
-
-            const tags = parseGraphTags(graph)
-            const points = await correlateGraphTagsToPoints(
-              video.namespace,
-              duration,
-              tags,
-              video.key,
-            )
-
-            if (abortController.signal.aborted) {
-              return
-            }
-
-            setVideos((previous) =>
-              previous.map((entry) => (entry.key === video.key ? { ...entry, points } : entry)),
-            )
-
+          if (!graph || abortController.signal.aborted) {
             fetchedTagsRef.current.add(video.key)
-          }),
-        )
+            continue
+          }
+
+          const tags = parseGraphTags(graph)
+          const points = await correlateGraphTagsToPoints(
+            video.namespace,
+            duration,
+            tags,
+            video.key,
+            abortController.signal,
+          )
+
+          if (abortController.signal.aborted) {
+            return
+          }
+
+          setVideos((previous) =>
+            previous.map((entry) => (entry.key === video.key ? { ...entry, points } : entry)),
+          )
+
+          fetchedTagsRef.current.add(video.key)
+
+          await waitForIdlePeriod()
+        }
       } catch (error) {
         console.error('Error loading tags', error)
       } finally {
