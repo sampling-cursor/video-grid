@@ -33,6 +33,7 @@ const GRID_ASPECT_HEIGHT = 16
 const MIN_GRID_SCALE = 1
 const MAX_GRID_SCALE = 4
 const VISIBLE_POINT_WINDOW = 1.5
+const STALE_POINT_TIMEOUT_MS = 1200
 
 const DEFAULT_VIDEO_IDS = ['tVlzKzKXjRw', 'aqz-KE-bpKQ', 'M7lc1UVf-VE']
 const GRAPH_SOCKET_URL =
@@ -190,51 +191,57 @@ const fetchGraphNodes = (publicKey: string): Promise<GraphNode[]> =>
     })
   })
 
-const correlateTagsFromGraph = (
+const yieldToMainThread = () =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, 0)
+  })
+
+const correlateTagsFromGraph = async (
   namespace: string,
   duration: number,
   nodes: GraphNode[],
-): PointOfInterest[] => {
-  const lookup = new Map<string, { time: number; row: number; column: number }>()
+): Promise<PointOfInterest[]> => {
+  const pendingNodes = new Map<string, string>()
+  nodes.forEach((node) => {
+    const publicKey = node.pubkey?.trim()
+    const memo = node.memo?.trim()
+    if (publicKey && memo) {
+      pendingNodes.set(publicKey, memo)
+    }
+  })
+
+  const points: PointOfInterest[] = []
   const maxWholeSecond = Math.max(0, Math.floor(duration))
 
-  for (let second = 0; second <= maxWholeSecond; second += 1) {
+  for (let second = 0; second <= maxWholeSecond && pendingNodes.size > 0; second += 1) {
     const secondNamespace = `${namespace}/T+${second}s`
     const grid = deriveGridPublicKeys(secondNamespace, GRID_ASPECT_HEIGHT, GRID_ASPECT_WIDTH)
 
     grid.forEach((position, publicKey) => {
-      lookup.set(publicKey, {
+      const memo = pendingNodes.get(publicKey)
+      if (!memo) {
+        return
+      }
+
+      pendingNodes.delete(publicKey)
+      points.push({
+        id: `${namespace}-${publicKey}`,
         time: second,
         row: position.row,
         column: position.column,
+        xPercent: xPercentFromColumn(position.column),
+        yPercent: yPercentFromRow(position.row),
+        note: memo,
       })
     })
+
+    if (second % 2 === 0) {
+      // Allow the browser time to paint while correlating large videos.
+      // Yielding here prevents long stretches of synchronous crypto work from freezing the page.
+      // eslint-disable-next-line no-await-in-loop
+      await yieldToMainThread()
+    }
   }
-
-  const points: PointOfInterest[] = []
-
-  nodes.forEach((node) => {
-    const publicKey = node.pubkey?.trim()
-    const memo = node.memo?.trim()
-    if (!publicKey || !memo) {
-      return
-    }
-
-    const match = lookup.get(publicKey)
-    if (!match) {
-      return
-    }
-
-    points.push({
-      id: `${namespace}-${publicKey}`,
-      time: match.time,
-      row: match.row,
-      column: match.column,
-      xPercent: xPercentFromColumn(match.column),
-      yPercent: yPercentFromRow(match.row),
-      note: memo,
-    })
-  })
 
   return points.sort((a, b) => a.time - b.time)
 }
@@ -262,6 +269,9 @@ function App() {
   const overlayRefs = useRef(new Map<string, HTMLDivElement | null>())
   const playerRefs = useRef(new Map<string, YouTubePlayer>())
   const fetchedTagVideos = useRef(new Set<string>())
+  const playbackUpdateTimestamps = useRef(
+    new Map<string, { time: number; wallClock: number }>(),
+  )
 
   const publicKeysByVideoKey = useMemo(() => {
     const entries: Array<[string, string]> = []
@@ -404,11 +414,11 @@ function App() {
         const currentTime = player.getCurrentTime?.() ?? 0
         const duration = player.getDuration?.() ?? 0
 
-        setPlaybackStates((previous) => {
-          const previousState = previous[activeVideoKey]
-          if (
-            !previousState ||
-            Math.abs(previousState.currentTime - currentTime) > 0.05 ||
+    setPlaybackStates((previous) => {
+      const previousState = previous[activeVideoKey]
+      if (
+        !previousState ||
+        Math.abs(previousState.currentTime - currentTime) > 0.05 ||
             Math.abs(previousState.duration - duration) > 0.1
           ) {
             return {
@@ -435,6 +445,23 @@ function App() {
   }, [activeVideoKey])
 
   useEffect(() => {
+    const wallClock = performance.now()
+
+    Object.entries(playbackStates).forEach(([key, state]) => {
+      if (!state) {
+        return
+      }
+
+      playbackUpdateTimestamps.current.set(key, {
+        time: state.currentTime,
+        wallClock,
+      })
+    })
+  }, [playbackStates])
+
+  useEffect(() => {
+    let isCancelled = false
+
     videos.forEach((video) => {
       if (!video.namespace || fetchedTagVideos.current.has(video.key)) {
         return
@@ -453,12 +480,16 @@ function App() {
       }
 
       fetchGraphNodes(rootPublicKey)
-        .then((nodes) => {
-          const correlatedPoints = correlateTagsFromGraph(
+        .then(async (nodes) => {
+          const correlatedPoints = await correlateTagsFromGraph(
             video.namespace as string,
             playback.duration,
             nodes,
           )
+
+          if (isCancelled) {
+            return
+          }
 
           fetchedTagVideos.current.add(video.key)
           setVideos((previous) =>
@@ -473,6 +504,10 @@ function App() {
           console.error(`Error fetching tags for ${video.namespace}`, error)
         })
     })
+
+    return () => {
+      isCancelled = true
+    }
   }, [videos, playbackStates, logVideoPoints])
 
   const registerContainerRef = useCallback(
@@ -781,9 +816,19 @@ function App() {
       <div className="feed">
         {videos.map((video) => {
           const playback = playbackStates[video.key] ?? { currentTime: 0, duration: 0 }
-          const activePoints = video.points.filter(
-            (point) => Math.abs(point.time - playback.currentTime) <= VISIBLE_POINT_WINDOW / 2,
-          )
+          const lastPlaybackUpdate = playbackUpdateTimestamps.current.get(video.key)
+          const now = performance.now()
+          const isPlaybackStale =
+            lastPlaybackUpdate &&
+            now - lastPlaybackUpdate.wallClock > STALE_POINT_TIMEOUT_MS &&
+            Math.abs(lastPlaybackUpdate.time - playback.currentTime) < 0.01
+
+          const activePoints = isPlaybackStale
+            ? []
+            : video.points.filter(
+                (point) =>
+                  Math.abs(point.time - playback.currentTime) <= VISIBLE_POINT_WINDOW / 2,
+              )
           const publicKey = publicKeysByVideoKey.get(video.key)
           const timelineMarkers = playback.duration
             ? video.points.map((point) => ({
