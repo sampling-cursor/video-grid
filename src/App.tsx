@@ -275,6 +275,7 @@ const requestGraphForKey = async (publicKey: string, signal?: AbortSignal) =>
     }
 
     const socket = new WebSocket(GRAPH_SOCKET_URL, GRAPH_SOCKET_PROTOCOLS)
+    let settled = false
 
     const closeSocket = () => {
       try {
@@ -286,14 +287,20 @@ const requestGraphForKey = async (publicKey: string, signal?: AbortSignal) =>
 
     const timer = window.setTimeout(() => {
       closeSocket()
-      resolve(null)
+      if (!settled) {
+        settled = true
+        resolve(null)
+      }
     }, 8000)
 
     if (signal) {
       signal.addEventListener('abort', () => {
         window.clearTimeout(timer)
         closeSocket()
-        resolve(null)
+        if (!settled) {
+          settled = true
+          resolve(null)
+        }
       })
     }
 
@@ -310,27 +317,38 @@ const requestGraphForKey = async (publicKey: string, signal?: AbortSignal) =>
       try {
         const data = JSON.parse(event.data)
         if (data?.type === 'graph' && typeof data.body?.graph === 'string') {
+          settled = true
           resolve(data.body.graph)
           window.clearTimeout(timer)
           closeSocket()
         }
       } catch (error) {
         console.error('Error parsing graph response', error)
+        if (!settled) {
+          settled = true
+          resolve(null)
+          window.clearTimeout(timer)
+          closeSocket()
+        }
+      }
+    })
+
+    socket.addEventListener('error', (event) => {
+      console.error('WebSocket error', event)
+      if (!settled) {
+        settled = true
         resolve(null)
         window.clearTimeout(timer)
         closeSocket()
       }
     })
 
-    socket.addEventListener('error', (event) => {
-      console.error('WebSocket error', event)
-      resolve(null)
-      window.clearTimeout(timer)
-      closeSocket()
-    })
-
     socket.addEventListener('close', () => {
       window.clearTimeout(timer)
+      if (!settled) {
+        settled = true
+        resolve(null)
+      }
     })
   })
 
@@ -586,6 +604,7 @@ function App() {
 
     return () => {
       abortController.abort()
+      setIsFetchingTags(false)
     }
   }, [playbackStates, videos])
 
