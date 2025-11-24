@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import YouTube from 'react-youtube'
 import type { YouTubeEvent, YouTubePlayer } from 'react-youtube'
 import './App.css'
-import { deriveNamespacePublicKey } from './hdWallet'
+import { deriveGridPublicKeys, deriveNamespacePublicKey } from './hdWallet'
 
 type PointOfInterest = {
   id: string
@@ -27,9 +27,16 @@ type PlaybackState = {
   duration: number
 }
 
+type GraphTag = {
+  publicKey: string
+  memo: string
+}
+
 const GRID_PADDING_PERCENT = '177.78%'
 const GRID_ASPECT_WIDTH = 9
 const GRID_ASPECT_HEIGHT = 16
+const TAG_GRID_ROWS = GRID_ASPECT_HEIGHT
+const TAG_GRID_COLUMNS = GRID_ASPECT_WIDTH
 const MIN_GRID_SCALE = 1
 const MAX_GRID_SCALE = 4
 const VISIBLE_POINT_WINDOW = 1.5
@@ -76,7 +83,7 @@ const extractVideoId = (value: string): string | null => {
         return potentialId
       }
     }
-  } catch (error) {
+  } catch {
     // Ignore invalid URL parsing errors.
   }
 
@@ -107,8 +114,8 @@ const createVideoTrack = (videoId: string, source: string, namespace?: string): 
   }
 }
 
-const parseGraphVideos = (dotGraph: string): VideoTrack[] => {
-  const nodes = Array.from(dotGraph.matchAll(/"[^"]+"\s*\[(.*?)\];/g)).map((match) => {
+const parseGraphNodes = (dotGraph: string): Record<string, string>[] =>
+  Array.from(dotGraph.matchAll(/"[^"]+"\s*\[(.*?)\];/g)).map((match) => {
     const attributes = match[1]
     const parsedAttributes: Record<string, string> = {}
 
@@ -120,24 +127,193 @@ const parseGraphVideos = (dotGraph: string): VideoTrack[] => {
     return parsedAttributes
   })
 
-  const tracks: VideoTrack[] = []
+const parseGraphVideos = (dotGraph: string): VideoTrack[] => {
+  const nodes = parseGraphNodes(dotGraph)
 
-  nodes.forEach((node) => {
-    const namespace = node.namespace?.trim()
-    const memo = node.memo?.trim()
+  return nodes
+    .map((node) => {
+      const namespace = node.namespace?.trim()
+      const memo = node.memo?.trim()
 
-    if (!namespace || !memo) {
+      if (!namespace || !memo) {
+        return null
+      }
+
+      const videoId = extractVideoId(memo)
+      if (!videoId) {
+        return null
+      }
+
+      return createVideoTrack(videoId, memo, namespace)
+    })
+    .filter((value): value is VideoTrack => Boolean(value))
+}
+
+const parseGraphTags = (dotGraph: string): GraphTag[] => {
+  const nodes = parseGraphNodes(dotGraph)
+
+  return nodes
+    .map((node) => {
+      const publicKey = node.pubkey?.trim()
+      const memo = node.memo?.trim()
+
+      if (!publicKey || !memo) {
+        return null
+      }
+
+      return { publicKey, memo }
+    })
+    .filter((value): value is GraphTag => Boolean(value))
+}
+
+const deriveBasePublicKeyForNamespace = (namespace: string): string => {
+  const [first] = deriveGridPublicKeys(namespace, 1, 1)
+  return first?.publicKey ?? ''
+}
+
+const deriveKeyGridForSecond = (
+  namespace: string,
+  second: number,
+): Map<
+  string,
+  {
+    row: number
+    column: number
+    xPercent: number
+    yPercent: number
+    time: number
+  }
+> => {
+  const timeScopedNamespace = `${namespace}/T+${second}s`
+  const keyGrid = deriveGridPublicKeys(timeScopedNamespace, TAG_GRID_ROWS, TAG_GRID_COLUMNS)
+
+  const gridMap = new Map<
+    string,
+    { row: number; column: number; xPercent: number; yPercent: number; time: number }
+  >()
+
+  keyGrid.forEach((entry) => {
+    const columnIndex = entry.address
+    const rowIndex = entry.account
+
+    gridMap.set(entry.publicKey, {
+      row: rowIndex + 1,
+      column: columnIndex + 1,
+      xPercent: ((columnIndex + 0.5) / TAG_GRID_COLUMNS) * 100,
+      yPercent: ((rowIndex + 0.5) / TAG_GRID_ROWS) * 100,
+      time: second,
+    })
+  })
+
+  return gridMap
+}
+
+const correlateGraphTagsToPoints = (
+  namespace: string,
+  durationSeconds: number,
+  tags: GraphTag[],
+  videoKey: string,
+): PointOfInterest[] => {
+  if (!tags.length || durationSeconds <= 0) {
+    return []
+  }
+
+  const floorDuration = Math.max(0, Math.floor(durationSeconds))
+  const lookup = new Map<string, PointOfInterest>()
+
+  for (let second = 0; second <= floorDuration; second += 1) {
+    const gridForSecond = deriveKeyGridForSecond(namespace, second)
+    gridForSecond.forEach((value, publicKey) => {
+      lookup.set(publicKey, {
+        id: `${videoKey}-${publicKey}`,
+        note: '',
+        ...value,
+      })
+    })
+  }
+
+  return tags
+    .map((tag) => {
+      const point = lookup.get(tag.publicKey)
+      if (!point) {
+        return null
+      }
+
+      return {
+        ...point,
+        note: tag.memo,
+      }
+    })
+    .filter((value): value is PointOfInterest => Boolean(value))
+    .sort((first, second) => first.time - second.time)
+}
+
+const requestGraphForKey = async (publicKey: string, signal?: AbortSignal) =>
+  new Promise<string | null>((resolve) => {
+    if (!publicKey) {
+      resolve(null)
       return
     }
 
-    const videoId = extractVideoId(memo)
-    if (videoId) {
-      tracks.push(createVideoTrack(videoId, memo, namespace))
-    }
-  })
+    const socket = new WebSocket(GRAPH_SOCKET_URL, GRAPH_SOCKET_PROTOCOLS)
 
-  return tracks
-}
+    const closeSocket = () => {
+      try {
+        socket.close()
+      } catch (error) {
+        console.error('Error closing WebSocket', error)
+      }
+    }
+
+    const timer = window.setTimeout(() => {
+      closeSocket()
+      resolve(null)
+    }, 8000)
+
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        window.clearTimeout(timer)
+        closeSocket()
+        resolve(null)
+      })
+    }
+
+    socket.addEventListener('open', () => {
+      socket.send(
+        JSON.stringify({
+          type: 'get_graph',
+          body: { public_key: publicKey },
+        }),
+      )
+    })
+
+    socket.addEventListener('message', (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data?.type === 'graph' && typeof data.body?.graph === 'string') {
+          resolve(data.body.graph)
+          window.clearTimeout(timer)
+          closeSocket()
+        }
+      } catch (error) {
+        console.error('Error parsing graph response', error)
+        resolve(null)
+        window.clearTimeout(timer)
+        closeSocket()
+      }
+    })
+
+    socket.addEventListener('error', (event) => {
+      console.error('WebSocket error', event)
+      resolve(null)
+      window.clearTimeout(timer)
+      closeSocket()
+    })
+
+    socket.addEventListener('close', () => {
+      window.clearTimeout(timer)
+    })
+  })
 
 function App() {
   const [videos, setVideos] = useState<VideoTrack[]>(
@@ -148,15 +324,13 @@ function App() {
   const [videoInput, setVideoInput] = useState('')
   const [videoError, setVideoError] = useState<string | null>(null)
   const [activeVideoKey, setActiveVideoKey] = useState<string | null>(null)
-  const [editingPoint, setEditingPoint] = useState<{
-    videoKey: string
-    pointId: string
-  } | null>(null)
   const [playbackStates, setPlaybackStates] = useState<Record<string, PlaybackState>>({})
+  const [isFetchingTags, setIsFetchingTags] = useState(false)
 
   const containerRefs = useRef(new Map<string, HTMLDivElement | null>())
   const overlayRefs = useRef(new Map<string, HTMLDivElement | null>())
   const playerRefs = useRef(new Map<string, YouTubePlayer>())
+  const fetchedTagsRef = useRef(new Set<string>())
 
   const publicKeysByVideoKey = useMemo(() => {
     const entries: Array<[string, string]> = []
@@ -325,6 +499,68 @@ function App() {
     }
   }, [activeVideoKey])
 
+  useEffect(() => {
+    const abortController = new AbortController()
+
+    const pendingVideos = videos.filter((video) => {
+      const duration = playbackStates[video.key]?.duration ?? 0
+      return (
+        Boolean(video.namespace) &&
+        duration > 0 &&
+        !fetchedTagsRef.current.has(video.key)
+      )
+    })
+
+    if (!pendingVideos.length) {
+      return () => abortController.abort()
+    }
+
+    setIsFetchingTags(true)
+
+    pendingVideos
+      .reduce<Promise<void>>(async (previousPromise, video) => {
+        await previousPromise
+
+        if (abortController.signal.aborted || !video.namespace) {
+          return
+        }
+
+        const duration = playbackStates[video.key]?.duration ?? 0
+        const basePublicKey = deriveBasePublicKeyForNamespace(video.namespace)
+        const graph = await requestGraphForKey(basePublicKey, abortController.signal)
+
+        if (!graph || abortController.signal.aborted) {
+          fetchedTagsRef.current.add(video.key)
+          return
+        }
+
+        const tags = parseGraphTags(graph)
+        const points = correlateGraphTagsToPoints(video.namespace, duration, tags, video.key)
+
+        if (abortController.signal.aborted) {
+          return
+        }
+
+        setVideos((previous) =>
+          previous.map((entry) => (entry.key === video.key ? { ...entry, points } : entry)),
+        )
+
+        fetchedTagsRef.current.add(video.key)
+      }, Promise.resolve())
+      .catch((error) => {
+        console.error('Error loading tags', error)
+      })
+      .finally(() => {
+        if (!abortController.signal.aborted) {
+          setIsFetchingTags(false)
+        }
+      })
+
+    return () => {
+      abortController.abort()
+    }
+  }, [playbackStates, videos])
+
   const registerContainerRef = useCallback(
     (key: string) =>
       (node: HTMLDivElement | null) => {
@@ -403,32 +639,25 @@ function App() {
   )
 
   useEffect(() => {
-    const socket = new WebSocket(GRAPH_SOCKET_URL, GRAPH_SOCKET_PROTOCOLS)
+    let isActive = true
 
-    socket.addEventListener('open', () => {
-      socket.send(JSON.stringify(GRAPH_REQUEST_BODY))
-    })
-
-    socket.addEventListener('message', (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        if (data?.type === 'graph' && typeof data.body?.graph === 'string') {
-          const graphVideos = parseGraphVideos(data.body.graph)
-          if (graphVideos.length) {
-            setVideos(graphVideos)
-          }
+    requestGraphForKey(GRAPH_REQUEST_BODY.body.public_key)
+      .then((graph) => {
+        if (!isActive || !graph) {
+          return
         }
-      } catch (error) {
-        console.error('Error parsing graph message', error)
-      }
-    })
 
-    socket.addEventListener('error', (event) => {
-      console.error('WebSocket error', event)
-    })
+        const graphVideos = parseGraphVideos(graph)
+        if (graphVideos.length) {
+          setVideos(graphVideos)
+        }
+      })
+      .catch((error) => {
+        console.error('Error fetching graph for videos', error)
+      })
 
     return () => {
-      socket.close()
+      isActive = false
     }
   }, [])
 
@@ -466,151 +695,6 @@ function App() {
     },
     [clampGridScale],
   )
-
-  const logVideoPoints = useCallback((videoKey: string, points: PointOfInterest[]) => {
-    console.log(`Annotations for ${videoKey}`, points)
-  }, [])
-
-  const updatePointNote = useCallback(
-    (videoKey: string, pointId: string, note: string) => {
-      setVideos((previous) => {
-        const next = previous.map((video) =>
-          video.key === videoKey
-            ? {
-                ...video,
-                points: video.points.map((point) =>
-                  point.id === pointId
-                    ? {
-                        ...point,
-                        note,
-                      }
-                    : point,
-                ),
-              }
-            : video,
-        )
-
-        const target = next.find((video) => video.key === videoKey)
-        if (target) {
-          logVideoPoints(videoKey, target.points)
-        }
-
-        return next
-      })
-    },
-    [logVideoPoints],
-  )
-
-  const removePoint = useCallback(
-    (videoKey: string, pointId: string) => {
-      setVideos((previous) => {
-        const next = previous.map((video) =>
-          video.key === videoKey
-            ? {
-                ...video,
-                points: video.points.filter((point) => point.id !== pointId),
-              }
-            : video,
-        )
-
-        const target = next.find((video) => video.key === videoKey)
-        if (target) {
-          logVideoPoints(videoKey, target.points)
-        }
-
-        return next
-      })
-    },
-    [logVideoPoints],
-  )
-
-  const resumeVideoIfNeeded = useCallback(
-    (videoKey: string) => {
-      const player = playerRefs.current.get(videoKey)
-      if (player && activeVideoKey === videoKey) {
-        player.playVideo?.()
-      }
-    },
-    [activeVideoKey],
-  )
-
-  const startEditingPoint = useCallback((videoKey: string, pointId: string) => {
-    const player = playerRefs.current.get(videoKey)
-    player?.pauseVideo?.()
-    setEditingPoint({ videoKey, pointId })
-  }, [])
-
-  const stopEditingPoint = useCallback(
-    (videoKey: string, pointId: string) => {
-      setEditingPoint((previous) => {
-        if (previous && previous.videoKey === videoKey && previous.pointId === pointId) {
-          resumeVideoIfNeeded(videoKey)
-          return null
-        }
-
-        return previous
-      })
-    },
-    [resumeVideoIfNeeded],
-  )
-
-  const registerPoint = useCallback(
-    (videoKey: string, rowIndex: number, columnIndex: number) =>
-      (event: React.MouseEvent<HTMLButtonElement>) => {
-        const player = playerRefs.current.get(videoKey)
-        if (!player) {
-          return
-        }
-
-        const overlay = overlayRefs.current.get(videoKey)
-        const currentTime = player.getCurrentTime?.() ?? 0
-        const overlayRect = overlay?.getBoundingClientRect()
-        const clickX = event.clientX
-        const clickY = event.clientY
-
-        let xPercent = ((columnIndex + 0.5) / columns) * 100
-        let yPercent = ((rowIndex + 0.5) / rows) * 100
-
-        if (overlayRect && overlayRect.width > 0 && overlayRect.height > 0) {
-          xPercent = ((clickX - overlayRect.left) / overlayRect.width) * 100
-          yPercent = ((clickY - overlayRect.top) / overlayRect.height) * 100
-        }
-
-        const id = `${videoKey}-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
-
-        const newPoint: PointOfInterest = {
-          id,
-          time: currentTime,
-          row: rowIndex + 1,
-          column: columnIndex + 1,
-          xPercent,
-          yPercent,
-          note: '',
-        }
-
-        setVideos((previous) => {
-          const next = previous.map((video) =>
-            video.key === videoKey
-              ? {
-                  ...video,
-                  points: [...video.points, newPoint].sort((a, b) => a.time - b.time),
-                }
-              : video,
-          )
-
-          const target = next.find((video) => video.key === videoKey)
-          if (target) {
-            logVideoPoints(videoKey, target.points)
-          }
-
-          return next
-        })
-
-        startEditingPoint(videoKey, id)
-      },
-    [columns, rows, logVideoPoints, startEditingPoint],
-  )
-
   const gridCellsForVideo = useCallback(
     (videoKey: string) =>
       Array.from({ length: rows * columns }, (_, index) => {
@@ -618,16 +702,15 @@ function App() {
         const columnIndex = index % columns
 
         return (
-          <button
+          <div
             key={`${videoKey}-${rowIndex}-${columnIndex}`}
-            type="button"
             className="grid-cell"
-            onClick={registerPoint(videoKey, rowIndex, columnIndex)}
-            aria-label={`Mark row ${rowIndex + 1}, column ${columnIndex + 1}`}
+            aria-label={`Row ${rowIndex + 1}, column ${columnIndex + 1}`}
+            role="presentation"
           />
         )
       }),
-    [columns, rows, registerPoint],
+    [columns, rows],
   )
 
   return (
@@ -638,6 +721,7 @@ function App() {
           Scroll through the feed, automatically focus on the active video, and tap the grid to
           capture annotations in real time.
         </p>
+        {isFetchingTags ? <p className="app__status">Loading tags from the graph…</p> : null}
       </header>
 
       <div className="feed">
@@ -720,57 +804,17 @@ function App() {
                 >
                   {gridCellsForVideo(video.key)}
                   {activePoints.map((point) => {
-                    const isEditing =
-                      editingPoint?.videoKey === video.key && editingPoint.pointId === point.id
-
                     return (
                       <div
                         key={point.id}
-                        className={isEditing ? 'poi-marker poi-marker--editing' : 'poi-marker'}
+                        className="poi-marker"
                         style={{
                           left: `${point.xPercent}%`,
                           top: `${point.yPercent}%`,
                         }}
                       >
                         <span className="poi-callout__time">{formatTimecode(point.time)}</span>
-                        {isEditing ? (
-                          <div className="poi-editor">
-                            <input
-                              autoFocus
-                              type="text"
-                              className="poi-editor__input"
-                              value={point.note}
-                              placeholder="Add a note"
-                              onChange={(event) =>
-                                updatePointNote(video.key, point.id, event.target.value)
-                              }
-                              onBlur={() => stopEditingPoint(video.key, point.id)}
-                            />
-                            <div className="poi-editor__actions">
-                              <button
-                                type="button"
-                                className="poi-editor__remove"
-                                onMouseDown={(event) => event.preventDefault()}
-                                onClick={() => {
-                                  stopEditingPoint(video.key, point.id)
-                                  removePoint(video.key, point.id)
-                                }}
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            className="poi-marker__trigger"
-                            onClick={() => startEditingPoint(video.key, point.id)}
-                          >
-                            <span className="poi-callout__note">
-                              {point.note ? point.note : 'Add a note'}
-                            </span>
-                          </button>
-                        )}
+                        <div className="poi-callout__note">{point.note}</div>
                       </div>
                     )
                   })}
