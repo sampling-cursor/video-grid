@@ -1,13 +1,9 @@
-import { Buffer } from 'buffer'
-import * as bip39 from 'bip39'
 import * as nacl from 'tweetnacl'
 import { hmac } from '@noble/hashes/hmac.js'
 import { sha512 } from '@noble/hashes/sha2.js'
-import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js'
-
-if (typeof globalThis.Buffer === 'undefined') {
-  ;(globalThis as any).Buffer = Buffer
-}
+import { utf8ToBytes } from '@noble/hashes/utils.js'
+import { entropyToMnemonic, mnemonicToSeedSync } from '@scure/bip39'
+import { wordlist } from '@scure/bip39/wordlists/english'
 
 const DOMAIN_LABEL = new TextEncoder().encode('necessitated/premises')
 const ACCOUNT_INDEX = 0
@@ -37,7 +33,7 @@ const generateHDKeypair = (
   account: number,
   address: number,
 ): { path: string; publicKey: string } => {
-  const masterSeed = bip39.mnemonicToSeedSync(mnemonic)
+  const masterSeed = mnemonicToSeedSync(mnemonic)
   const derivedSeed = deriveHDSeed(new Uint8Array(masterSeed), account, address)
   const keypair = nacl.sign.keyPair.fromSeed(derivedSeed)
 
@@ -50,7 +46,7 @@ const generateHDKeypair = (
 const generateMnemonic = (passphrase: string): string => {
   const hash = sha512(utf8ToBytes(passphrase))
   const entropy = hash.slice(0, 32)
-  return bip39.entropyToMnemonic(bytesToHex(entropy))
+  return entropyToMnemonic(entropy, wordlist)
 }
 
 export const deriveNamespacePublicKey = (
