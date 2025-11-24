@@ -1,0 +1,6 @@
+declare module 'tweetnacl'
+declare module '@noble/hashes/hmac.js'
+declare module '@noble/hashes/sha2.js'
+declare module '@noble/hashes/utils.js'
+declare module '@scure/bip39'
+declare module '@scure/bip39/wordlists/english'

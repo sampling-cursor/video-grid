@@ -55,3 +55,21 @@ export const deriveNamespacePublicKey = (
   const mnemonic = generateMnemonic(namespace)
   return generateHDKeypair(mnemonic, ACCOUNT_INDEX, ADDRESS_INDEX)
 }
+
+export const deriveGridPublicKeys = (
+  namespace: string,
+  rows: number,
+  columns: number,
+): Map<string, { row: number; column: number }> => {
+  const mnemonic = generateMnemonic(namespace)
+  const grid = new Map<string, { row: number; column: number }>()
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const { publicKey } = generateHDKeypair(mnemonic, row, column)
+      grid.set(publicKey, { row: row + 1, column: column + 1 })
+    }
+  }
+
+  return grid
+}

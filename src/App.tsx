@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import YouTube from 'react-youtube'
 import type { YouTubeEvent, YouTubePlayer } from 'react-youtube'
 import './App.css'
-import { deriveNamespacePublicKey } from './hdWallet'
+import { deriveGridPublicKeys, deriveNamespacePublicKey } from './hdWallet'
 
 type PointOfInterest = {
   id: string
@@ -38,11 +38,17 @@ const DEFAULT_VIDEO_IDS = ['tVlzKzKXjRw', 'aqz-KE-bpKQ', 'M7lc1UVf-VE']
 const GRAPH_SOCKET_URL =
   'wss://ungallant-unimpeding-kade.ngrok-free.dev/0000000e9894eb8fe2c8c5f330ff78210eb909bc683a2fe89a9e2233fabf5354'
 const GRAPH_SOCKET_PROTOCOLS = ['consequence.1']
-const GRAPH_REQUEST_BODY = {
+const GRAPH_REQUEST_BODY = (publicKey: string) => ({
   type: 'get_graph',
   body: {
-    public_key: '0000000000000000000000000000000000000000000=',
+    public_key: publicKey,
   },
+})
+
+type GraphNode = {
+  namespace?: string
+  memo?: string
+  pubkey?: string
 }
 
 const extractVideoId = (value: string): string | null => {
@@ -107,8 +113,8 @@ const createVideoTrack = (videoId: string, source: string, namespace?: string): 
   }
 }
 
-const parseGraphVideos = (dotGraph: string): VideoTrack[] => {
-  const nodes = Array.from(dotGraph.matchAll(/"[^"]+"\s*\[(.*?)\];/g)).map((match) => {
+const parseGraphNodes = (dotGraph: string): GraphNode[] =>
+  Array.from(dotGraph.matchAll(/"[^"]+"\s*\[(.*?)\];/g)).map((match) => {
     const attributes = match[1]
     const parsedAttributes: Record<string, string> = {}
 
@@ -120,6 +126,7 @@ const parseGraphVideos = (dotGraph: string): VideoTrack[] => {
     return parsedAttributes
   })
 
+const parseGraphVideos = (nodes: GraphNode[]): VideoTrack[] => {
   const tracks: VideoTrack[] = []
 
   nodes.forEach((node) => {
@@ -139,6 +146,103 @@ const parseGraphVideos = (dotGraph: string): VideoTrack[] => {
   return tracks
 }
 
+const fetchGraphNodes = (publicKey: string): Promise<GraphNode[]> =>
+  new Promise((resolve, reject) => {
+    const socket = new WebSocket(GRAPH_SOCKET_URL, GRAPH_SOCKET_PROTOCOLS)
+    let hasResolved = false
+
+    const cleanup = () => {
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close()
+      }
+    }
+
+    socket.addEventListener('open', () => {
+      socket.send(JSON.stringify(GRAPH_REQUEST_BODY(publicKey)))
+    })
+
+    socket.addEventListener('message', (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data?.type === 'graph' && typeof data.body?.graph === 'string') {
+          hasResolved = true
+          cleanup()
+          resolve(parseGraphNodes(data.body.graph))
+        }
+      } catch (error) {
+        console.error('Error parsing graph message', error)
+      }
+    })
+
+    socket.addEventListener('error', (event) => {
+      console.error('WebSocket error', event)
+      if (!hasResolved) {
+        hasResolved = true
+        cleanup()
+        reject(new Error('WebSocket error'))
+      }
+    })
+
+    socket.addEventListener('close', () => {
+      if (!hasResolved) {
+        reject(new Error('WebSocket closed before receiving data'))
+      }
+    })
+  })
+
+const correlateTagsFromGraph = (
+  namespace: string,
+  duration: number,
+  nodes: GraphNode[],
+): PointOfInterest[] => {
+  const lookup = new Map<string, { time: number; row: number; column: number }>()
+  const maxWholeSecond = Math.max(0, Math.floor(duration))
+
+  for (let second = 0; second <= maxWholeSecond; second += 1) {
+    const secondNamespace = `${namespace}/T+${second}s`
+    const grid = deriveGridPublicKeys(secondNamespace, GRID_ASPECT_HEIGHT, GRID_ASPECT_WIDTH)
+
+    grid.forEach((position, publicKey) => {
+      lookup.set(publicKey, {
+        time: second,
+        row: position.row,
+        column: position.column,
+      })
+    })
+  }
+
+  const points: PointOfInterest[] = []
+
+  nodes.forEach((node) => {
+    const publicKey = node.pubkey?.trim()
+    const memo = node.memo?.trim()
+    if (!publicKey || !memo) {
+      return
+    }
+
+    const match = lookup.get(publicKey)
+    if (!match) {
+      return
+    }
+
+    points.push({
+      id: `${namespace}-${publicKey}`,
+      time: match.time,
+      row: match.row,
+      column: match.column,
+      xPercent: xPercentFromColumn(match.column),
+      yPercent: yPercentFromRow(match.row),
+      note: memo,
+    })
+  })
+
+  return points.sort((a, b) => a.time - b.time)
+}
+
+const xPercentFromColumn = (column: number) => ((column - 0.5) / GRID_ASPECT_WIDTH) * 100
+
+const yPercentFromRow = (row: number) => ((row - 0.5) / GRID_ASPECT_HEIGHT) * 100
+
 function App() {
   const [videos, setVideos] = useState<VideoTrack[]>(
     DEFAULT_VIDEO_IDS.map((id) => createVideoTrack(id, `https://www.youtube.com/watch?v=${id}`)),
@@ -157,6 +261,7 @@ function App() {
   const containerRefs = useRef(new Map<string, HTMLDivElement | null>())
   const overlayRefs = useRef(new Map<string, HTMLDivElement | null>())
   const playerRefs = useRef(new Map<string, YouTubePlayer>())
+  const fetchedTagVideos = useRef(new Set<string>())
 
   const publicKeysByVideoKey = useMemo(() => {
     const entries: Array<[string, string]> = []
@@ -197,6 +302,10 @@ function App() {
     }),
     [rows, columns],
   )
+
+  const logVideoPoints = useCallback((videoKey: string, points: PointOfInterest[]) => {
+    console.log(`Annotations for ${videoKey}`, points)
+  }, [])
 
   useEffect(() => {
     const allKeys = new Set(videos.map((video) => video.key))
@@ -325,6 +434,47 @@ function App() {
     }
   }, [activeVideoKey])
 
+  useEffect(() => {
+    videos.forEach((video) => {
+      if (!video.namespace || fetchedTagVideos.current.has(video.key)) {
+        return
+      }
+
+      const playback = playbackStates[video.key]
+      if (!playback?.duration || playback.duration <= 0) {
+        return
+      }
+
+      const rootGrid = deriveGridPublicKeys(video.namespace, 1, 1)
+      const [rootPublicKey] = rootGrid.keys()
+
+      if (!rootPublicKey) {
+        return
+      }
+
+      fetchGraphNodes(rootPublicKey)
+        .then((nodes) => {
+          const correlatedPoints = correlateTagsFromGraph(
+            video.namespace as string,
+            playback.duration,
+            nodes,
+          )
+
+          fetchedTagVideos.current.add(video.key)
+          setVideos((previous) =>
+            previous.map((entry) =>
+              entry.key === video.key ? { ...entry, points: correlatedPoints } : entry,
+            ),
+          )
+
+          logVideoPoints(video.key, correlatedPoints)
+        })
+        .catch((error) => {
+          console.error(`Error fetching tags for ${video.namespace}`, error)
+        })
+    })
+  }, [videos, playbackStates, logVideoPoints])
+
   const registerContainerRef = useCallback(
     (key: string) =>
       (node: HTMLDivElement | null) => {
@@ -347,6 +497,15 @@ function App() {
         const player = event.target
         player.mute()
         playerRefs.current.set(key, player)
+
+        const duration = player.getDuration?.() ?? 0
+        setPlaybackStates((previous) => ({
+          ...previous,
+          [key]: {
+            currentTime: previous[key]?.currentTime ?? 0,
+            duration,
+          },
+        }))
 
         if (key === activeVideoKey) {
           player.playVideo?.()
@@ -403,33 +562,16 @@ function App() {
   )
 
   useEffect(() => {
-    const socket = new WebSocket(GRAPH_SOCKET_URL, GRAPH_SOCKET_PROTOCOLS)
-
-    socket.addEventListener('open', () => {
-      socket.send(JSON.stringify(GRAPH_REQUEST_BODY))
-    })
-
-    socket.addEventListener('message', (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        if (data?.type === 'graph' && typeof data.body?.graph === 'string') {
-          const graphVideos = parseGraphVideos(data.body.graph)
-          if (graphVideos.length) {
-            setVideos(graphVideos)
-          }
+    fetchGraphNodes('0000000000000000000000000000000000000000000=')
+      .then((nodes) => {
+        const graphVideos = parseGraphVideos(nodes)
+        if (graphVideos.length) {
+          setVideos(graphVideos)
         }
-      } catch (error) {
-        console.error('Error parsing graph message', error)
-      }
-    })
-
-    socket.addEventListener('error', (event) => {
-      console.error('WebSocket error', event)
-    })
-
-    return () => {
-      socket.close()
-    }
+      })
+      .catch((error) => {
+        console.error('Error fetching videos from graph', error)
+      })
   }, [])
 
   const clampGridScale = useCallback(
@@ -466,10 +608,6 @@ function App() {
     },
     [clampGridScale],
   )
-
-  const logVideoPoints = useCallback((videoKey: string, points: PointOfInterest[]) => {
-    console.log(`Annotations for ${videoKey}`, points)
-  }, [])
 
   const updatePointNote = useCallback(
     (videoKey: string, pointId: string, note: string) => {
