@@ -1,4 +1,4 @@
-import { Buffer } from 'buffer/'
+import { Buffer } from 'buffer'
 import * as bip39 from 'bip39'
 import * as nacl from 'tweetnacl'
 import { hmac } from '@noble/hashes/hmac.js'
