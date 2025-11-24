@@ -8,4 +8,12 @@ const isGitHubActions = Boolean(process.env.GITHUB_ACTIONS)
 export default defineConfig({
   base: isGitHubActions && repositoryName ? `/${repositoryName}/` : '/',
   plugins: [react()],
+  resolve: {
+    alias: {
+      buffer: 'buffer/',
+    },
+  },
+  optimizeDeps: {
+    include: ['buffer'],
+  },
 })
