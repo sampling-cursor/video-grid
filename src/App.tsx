@@ -32,6 +32,11 @@ type GraphTag = {
   memo: string
 }
 
+const yieldToMainThread = () =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, 0)
+  })
+
 const GRID_PADDING_PERCENT = '177.78%'
 const GRID_ASPECT_WIDTH = 9
 const GRID_ASPECT_HEIGHT = 16
@@ -208,12 +213,12 @@ const deriveKeyGridForSecond = (
   return gridMap
 }
 
-const correlateGraphTagsToPoints = (
+const correlateGraphTagsToPoints = async (
   namespace: string,
   durationSeconds: number,
   tags: GraphTag[],
   videoKey: string,
-): PointOfInterest[] => {
+): Promise<PointOfInterest[]> => {
   if (!tags.length || durationSeconds <= 0) {
     return []
   }
@@ -230,6 +235,11 @@ const correlateGraphTagsToPoints = (
         ...value,
       })
     })
+
+    if (second % 15 === 0) {
+      // Yield periodically so long-running correlations don't block the UI thread.
+      await yieldToMainThread()
+    }
   }
 
   return tags
@@ -517,44 +527,52 @@ function App() {
 
     setIsFetchingTags(true)
 
-    pendingVideos
-      .reduce<Promise<void>>(async (previousPromise, video) => {
-        await previousPromise
+    const loadTags = async () => {
+      try {
+        await Promise.all(
+          pendingVideos.map(async (video) => {
+            if (!video.namespace || abortController.signal.aborted) {
+              return
+            }
 
-        if (abortController.signal.aborted || !video.namespace) {
-          return
-        }
+            const duration = playbackStates[video.key]?.duration ?? 0
+            const basePublicKey = deriveBasePublicKeyForNamespace(video.namespace)
+            const graph = await requestGraphForKey(basePublicKey, abortController.signal)
 
-        const duration = playbackStates[video.key]?.duration ?? 0
-        const basePublicKey = deriveBasePublicKeyForNamespace(video.namespace)
-        const graph = await requestGraphForKey(basePublicKey, abortController.signal)
+            if (!graph || abortController.signal.aborted) {
+              fetchedTagsRef.current.add(video.key)
+              return
+            }
 
-        if (!graph || abortController.signal.aborted) {
-          fetchedTagsRef.current.add(video.key)
-          return
-        }
+            const tags = parseGraphTags(graph)
+            const points = await correlateGraphTagsToPoints(
+              video.namespace,
+              duration,
+              tags,
+              video.key,
+            )
 
-        const tags = parseGraphTags(graph)
-        const points = correlateGraphTagsToPoints(video.namespace, duration, tags, video.key)
+            if (abortController.signal.aborted) {
+              return
+            }
 
-        if (abortController.signal.aborted) {
-          return
-        }
+            setVideos((previous) =>
+              previous.map((entry) => (entry.key === video.key ? { ...entry, points } : entry)),
+            )
 
-        setVideos((previous) =>
-          previous.map((entry) => (entry.key === video.key ? { ...entry, points } : entry)),
+            fetchedTagsRef.current.add(video.key)
+          }),
         )
-
-        fetchedTagsRef.current.add(video.key)
-      }, Promise.resolve())
-      .catch((error) => {
+      } catch (error) {
         console.error('Error loading tags', error)
-      })
-      .finally(() => {
+      } finally {
         if (!abortController.signal.aborted) {
           setIsFetchingTags(false)
         }
-      })
+      }
+    }
+
+    loadTags()
 
     return () => {
       abortController.abort()
