@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import YouTube from 'react-youtube'
 import type { YouTubeEvent, YouTubePlayer } from 'react-youtube'
 import './App.css'
+import { deriveNamespacePublicKey } from './hdWallet'
 
 type PointOfInterest = {
   id: string
@@ -156,6 +157,19 @@ function App() {
   const containerRefs = useRef(new Map<string, HTMLDivElement | null>())
   const overlayRefs = useRef(new Map<string, HTMLDivElement | null>())
   const playerRefs = useRef(new Map<string, YouTubePlayer>())
+
+  const publicKeysByVideoKey = useMemo(() => {
+    const entries: Array<[string, string]> = []
+
+    videos.forEach((video) => {
+      if (video.namespace) {
+        const { publicKey } = deriveNamespacePublicKey(video.namespace)
+        entries.push([video.key, publicKey])
+      }
+    })
+
+    return new Map(entries)
+  }, [videos])
 
   const baseYouTubeOptions = useMemo(
     () => ({
@@ -632,6 +646,7 @@ function App() {
           const activePoints = video.points.filter(
             (point) => Math.abs(point.time - playback.currentTime) <= VISIBLE_POINT_WINDOW / 2,
           )
+          const publicKey = publicKeysByVideoKey.get(video.key)
           const timelineMarkers = playback.duration
             ? video.points.map((point) => ({
                 id: point.id,
@@ -656,7 +671,15 @@ function App() {
               <div className="video-card__meta">
                 <div className="video-card__heading">
                   {video.namespace ? (
-                    <span className="video-card__namespace">{video.namespace}</span>
+                    <div className="video-card__namespace-group">
+                      <span className="video-card__namespace">{video.namespace}</span>
+                      {publicKey ? (
+                        <div className="video-card__key">
+                          <span className="video-card__key-label">ED25519 Public Key</span>
+                          <span className="video-card__public-key">{publicKey}</span>
+                        </div>
+                      ) : null}
+                    </div>
                   ) : null}
                   <a
                     className="video-card__link"
