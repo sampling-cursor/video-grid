@@ -1,8 +1,13 @@
+import { Buffer } from 'buffer'
 import * as bip39 from 'bip39'
 import * as nacl from 'tweetnacl'
 import { hmac } from '@noble/hashes/hmac.js'
 import { sha512 } from '@noble/hashes/sha2.js'
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js'
+
+if (typeof globalThis.Buffer === 'undefined') {
+  ;(globalThis as typeof globalThis & { Buffer: typeof Buffer }).Buffer = Buffer
+}
 
 const DOMAIN_LABEL = new TextEncoder().encode('necessitated/premises')
 const ACCOUNT_INDEX = 0
