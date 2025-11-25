@@ -159,6 +159,58 @@
   border: 0;
 }
 
+.annotation-controls {
+  margin-top: 0.75rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.annotation-controls__status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.annotation-controls__mode {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.annotation-controls__hint {
+  color: #475569;
+  font-size: 0.9rem;
+}
+
+.annotation-controls__toggle {
+  border-radius: 10px;
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  background: rgba(99, 102, 241, 0.08);
+  color: #312e81;
+  padding: 0.45rem 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.annotation-controls__toggle:hover,
+.annotation-controls__toggle:focus-visible {
+  outline: none;
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(99, 102, 241, 0.2);
+}
+
+.annotation-controls__toggle--active {
+  background: rgba(99, 102, 241, 0.16);
+  border-color: rgba(99, 102, 241, 0.35);
+  color: #1e1b4b;
+}
+
 .timeline {
   margin-top: 1rem;
 }
@@ -211,17 +263,17 @@
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(15, 23, 42, 0.05), rgba(15, 23, 42, 0.15));
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.03), rgba(15, 23, 42, 0.08));
   pointer-events: none;
 }
 
 .grid-cell {
   background: transparent;
-  border: 1px solid rgba(248, 250, 252, 0.15);
+  border: 1px solid rgba(248, 250, 252, 0.08);
   margin: -0.5px;
   padding: 0;
   pointer-events: auto;
-  cursor: pointer;
+  cursor: crosshair;
   transition: background-color 0.2s ease;
 }
 
@@ -229,6 +281,15 @@
 .grid-cell:focus-visible {
   background: rgba(99, 102, 241, 0.16);
   outline: none;
+}
+
+.video-grid[data-annotation-active='false'] .grid-cell,
+.video-grid[data-annotation-active='false'] .poi-marker {
+  pointer-events: none;
+}
+
+.video-grid[data-annotation-active='false'] .grid-cell {
+  cursor: default;
 }
 
 .poi-marker {

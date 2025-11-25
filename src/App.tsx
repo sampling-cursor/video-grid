@@ -232,6 +232,8 @@ function App() {
   )
   const [gridScale, setGridScale] = useState(1)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
+  const [isAnnotationLocked, setIsAnnotationLocked] = useState(false)
+  const [isShiftHeld, setIsShiftHeld] = useState(false)
   const [videoInput, setVideoInput] = useState('')
   const [videoError, setVideoError] = useState<string | null>(null)
   const [activeVideoKey, setActiveVideoKey] = useState<string | null>(null)
@@ -289,6 +291,11 @@ function App() {
       gridTemplateColumns: `repeat(${columns}, 1fr)`,
     }),
     [rows, columns],
+  )
+
+  const isAnnotationInteractionEnabled = useMemo(
+    () => isAnnotationLocked || isShiftHeld || Boolean(editingPoint),
+    [isAnnotationLocked, isShiftHeld, editingPoint],
   )
 
   useEffect(() => {
@@ -374,6 +381,32 @@ function App() {
       }
     })
   }, [activeVideoKey])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Shift') {
+        setIsShiftHeld(true)
+      }
+    }
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === 'Shift') {
+        setIsShiftHeld(false)
+      }
+    }
+
+    const handleWindowBlur = () => setIsShiftHeld(false)
+
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('blur', handleWindowBlur)
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('blur', handleWindowBlur)
+    }
+  }, [])
 
   useEffect(() => {
     if (!activeVideoKey) {
@@ -743,6 +776,10 @@ function App() {
   const registerPoint = useCallback(
     (videoKey: string, rowIndex: number, columnIndex: number) =>
       (event: React.MouseEvent<HTMLButtonElement>) => {
+        if (!isAnnotationInteractionEnabled) {
+          return
+        }
+
         const player = playerRefs.current.get(videoKey)
         if (!player) {
           return
@@ -794,7 +831,7 @@ function App() {
 
         startEditingPoint(videoKey, id)
       },
-    [columns, rows, logVideoPoints, startEditingPoint],
+    [columns, rows, logVideoPoints, startEditingPoint, isAnnotationInteractionEnabled],
   )
 
   const gridCellsForVideo = useCallback(
@@ -895,6 +932,7 @@ function App() {
                   className="video-grid"
                   style={gridTemplateStyle}
                   data-active={activeVideoKey === video.key}
+                  data-annotation-active={isAnnotationInteractionEnabled ? 'true' : 'false'}
                 >
                   {gridCellsForVideo(video.key)}
                   {activePoints.map((point) => {
@@ -965,6 +1003,28 @@ function App() {
                     )
                   })}
                 </div>
+              </div>
+
+              <div className="annotation-controls">
+                <div className="annotation-controls__status">
+                  <span className="annotation-controls__mode">
+                    {isAnnotationInteractionEnabled ? 'Annotation mode active' : 'Playback-first mode'}
+                  </span>
+                  <span className="annotation-controls__hint">
+                    Hold Shift to place or edit annotations without blocking the YouTube player.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className={
+                    isAnnotationLocked
+                      ? 'annotation-controls__toggle annotation-controls__toggle--active'
+                      : 'annotation-controls__toggle'
+                  }
+                  onClick={() => setIsAnnotationLocked((previous) => !previous)}
+                >
+                  {isAnnotationLocked ? 'Disable annotation lock' : 'Lock annotation mode'}
+                </button>
               </div>
 
               {playback.duration > 0 ? (
