@@ -36,7 +36,7 @@ const VISIBLE_POINT_WINDOW = 1.5
 
 const DEFAULT_VIDEO_IDS = ['tVlzKzKXjRw', 'aqz-KE-bpKQ', 'M7lc1UVf-VE']
 const DEFAULT_GRAPH_SOCKET_URL =
-  'wss://ungallant-unimpeding-kade.ngrok-free.dev/0000000e9894eb8fe2c8c5f330ff78210eb909bc683a2fe89a9e2233fabf5354'
+  'wss://ungallant-unimpeding-kade.ngrok-free.dev/00000063e8951c027db2a54567aa9798c71b1820cffdb096a61e72fe82f6d8e0'
 const GRAPH_SOCKET_PROTOCOLS = ['consequence.1']
 const GRAPH_REQUEST_BODY = {
   type: 'get_graph',
@@ -139,6 +139,26 @@ const parseGraphVideos = (dotGraph: string): VideoTrack[] => {
   return tracks
 }
 
+const normalizeSocketUrl = (value: string): string | null => {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  const hasProtocol = trimmed.startsWith('ws://') || trimmed.startsWith('wss://')
+  const candidate = hasProtocol ? trimmed : `wss://${trimmed}`
+
+  try {
+    const url = new URL(candidate)
+    if (!url.protocol.startsWith('ws')) {
+      return null
+    }
+    return url.toString()
+  } catch (error) {
+    return null
+  }
+}
+
 function App() {
   const [videos, setVideos] = useState<VideoTrack[]>(
     DEFAULT_VIDEO_IDS.map((id) => createVideoTrack(id, `https://www.youtube.com/watch?v=${id}`)),
@@ -154,6 +174,8 @@ function App() {
   } | null>(null)
   const [playbackStates, setPlaybackStates] = useState<Record<string, PlaybackState>>({})
   const [socketUrl, setSocketUrl] = useState(DEFAULT_GRAPH_SOCKET_URL)
+  const [socketUrlInput, setSocketUrlInput] = useState(DEFAULT_GRAPH_SOCKET_URL)
+  const [socketVersion, setSocketVersion] = useState(0)
   const [socketError, setSocketError] = useState<string | null>(null)
 
   const containerRefs = useRef(new Map<string, HTMLDivElement | null>())
@@ -405,15 +427,16 @@ function App() {
   )
 
   useEffect(() => {
-    if (!socketUrl.trim()) {
-      setSocketError('Enter a WebSocket URL to load graph data.')
+    const normalizedUrl = normalizeSocketUrl(socketUrl)
+    if (!normalizedUrl) {
+      setSocketError('Enter a valid WebSocket URL to load graph data.')
       return undefined
     }
 
     let socket: WebSocket | null = null
 
     try {
-      socket = new WebSocket(socketUrl, GRAPH_SOCKET_PROTOCOLS)
+      socket = new WebSocket(normalizedUrl, GRAPH_SOCKET_PROTOCOLS)
       setSocketError(null)
     } catch (error) {
       console.error('Error creating WebSocket', error)
@@ -451,7 +474,24 @@ function App() {
     return () => {
       socket?.close()
     }
-  }, [socketUrl])
+  }, [socketUrl, socketVersion])
+
+  const handleSocketSubmit = useCallback(
+    (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault()
+      const normalizedUrl = normalizeSocketUrl(socketUrlInput)
+
+      if (!normalizedUrl) {
+        setSocketError('Enter a valid WebSocket URL to load graph data.')
+        return
+      }
+
+      setSocketUrl(normalizedUrl)
+      setSocketVersion((previous) => previous + 1)
+      setSocketError(null)
+    },
+    [socketUrlInput],
+  )
 
   const clampGridScale = useCallback(
     (scale: number) => Math.min(MAX_GRID_SCALE, Math.max(MIN_GRID_SCALE, scale)),
@@ -839,20 +879,25 @@ function App() {
 
           <section className="drawer__section">
             <h3>WebSocket</h3>
-            <label className="field">
-              <span className="field__label">Graph WebSocket URL</span>
-              <input
-                value={socketUrl}
-                onChange={(event) => setSocketUrl(event.target.value)}
-                placeholder={DEFAULT_GRAPH_SOCKET_URL}
-                className={socketError ? 'field__input field__input--error' : 'field__input'}
-              />
-            </label>
-            {socketError ? (
-              <p className="field__error" role="alert">
-                {socketError}
-              </p>
-            ) : null}
+            <form className="drawer__form" onSubmit={handleSocketSubmit}>
+              <label className="field">
+                <span className="field__label">Graph WebSocket URL</span>
+                <input
+                  value={socketUrlInput}
+                  onChange={(event) => setSocketUrlInput(event.target.value)}
+                  placeholder={DEFAULT_GRAPH_SOCKET_URL}
+                  className={socketError ? 'field__input field__input--error' : 'field__input'}
+                />
+              </label>
+              {socketError ? (
+                <p className="field__error" role="alert">
+                  {socketError}
+                </p>
+              ) : null}
+              <button type="submit" className="button primary">
+                Apply WebSocket URL
+              </button>
+            </form>
           </section>
 
           <section className="drawer__section">
