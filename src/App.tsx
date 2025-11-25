@@ -12,6 +12,7 @@ type PointOfInterest = {
   xPercent: number
   yPercent: number
   note: string
+  isReadOnly?: boolean
 }
 
 type VideoTrack = {
@@ -38,12 +39,9 @@ const DEFAULT_VIDEO_IDS = ['tVlzKzKXjRw', 'aqz-KE-bpKQ', 'M7lc1UVf-VE']
 const DEFAULT_GRAPH_SOCKET_URL =
   'wss://ungallant-unimpeding-kade.ngrok-free.dev/00000063e8951c027db2a54567aa9798c71b1820cffdb096a61e72fe82f6d8e0'
 const GRAPH_SOCKET_PROTOCOLS = ['consequence.1']
-const GRAPH_REQUEST_BODY = {
-  type: 'get_graph',
-  body: {
-    public_key: '0000000000000000000000000000000000000000000=',
-  },
-}
+const DEFAULT_GRAPH_REQUEST_PUBLIC_KEY = '0000000000000000000000000000000000000000000='
+
+type GraphNode = Record<string, string>
 
 const extractVideoId = (value: string): string | null => {
   const trimmed = value.trim()
@@ -107,10 +105,10 @@ const createVideoTrack = (videoId: string, source: string, namespace?: string): 
   }
 }
 
-const parseGraphVideos = (dotGraph: string): VideoTrack[] => {
-  const nodes = Array.from(dotGraph.matchAll(/"[^"]+"\s*\[(.*?)\];/g)).map((match) => {
+const parseGraphNodes = (dotGraph: string): GraphNode[] =>
+  Array.from(dotGraph.matchAll(/"[^"]+"\s*\[(.*?)\];/g)).map((match) => {
     const attributes = match[1]
-    const parsedAttributes: Record<string, string> = {}
+    const parsedAttributes: GraphNode = {}
 
     for (const attribute of attributes.matchAll(/(\w+)="([^"]*)"/g)) {
       const [, key, value] = attribute
@@ -120,6 +118,7 @@ const parseGraphVideos = (dotGraph: string): VideoTrack[] => {
     return parsedAttributes
   })
 
+const parseGraphVideos = (nodes: GraphNode[]): VideoTrack[] => {
   const tracks: VideoTrack[] = []
 
   nodes.forEach((node) => {
@@ -137,6 +136,74 @@ const parseGraphVideos = (dotGraph: string): VideoTrack[] => {
   })
 
   return tracks
+}
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const parseTagPointsForNamespace = (nodes: GraphNode[], namespace?: string): PointOfInterest[] => {
+  if (!namespace) {
+    return []
+  }
+
+  const pattern = new RegExp(`^${escapeRegExp(namespace)}/T\\+(\\d+)s/(\\d+)x(\\d+)/`)
+
+  return nodes
+    .reduce<PointOfInterest[]>((points, node) => {
+      const memo = node.memo?.trim()
+      const pubkey = node.pubkey?.trim()
+
+      if (!memo || !pubkey) {
+        return points
+      }
+
+      const match = pubkey.match(pattern)
+      if (!match) {
+        return points
+      }
+
+      const [, timeString, columnString, rowString] = match
+      const time = Number.parseInt(timeString, 10)
+      const column = Number.parseInt(columnString, 10)
+      const row = Number.parseInt(rowString, 10)
+
+      if (Number.isNaN(time) || Number.isNaN(column) || Number.isNaN(row)) {
+        return points
+      }
+
+      const xPercent = ((column - 0.5) / GRID_ASPECT_WIDTH) * 100
+      const yPercent = ((row - 0.5) / GRID_ASPECT_HEIGHT) * 100
+
+      points.push({
+        id: pubkey,
+        time,
+        row,
+        column,
+        xPercent,
+        yPercent,
+        note: memo,
+        isReadOnly: true,
+      })
+
+      return points
+    }, [])
+    .sort((a, b) => a.time - b.time)
+}
+
+const escapeHtml = (value: string): string =>
+  value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
+
+const formatMemoHtml = (memo: string): string => {
+  const escaped = escapeHtml(memo)
+  const withBold = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+  const withItalics = withBold.replace(/(^|\s)_(.+?)_([^\w]|$)/g, '$1<em>$2</em>$3').replace(/\*(.+?)\*/g, '<em>$1</em>')
+  const withLinks = withItalics.replace(
+    /(https?:\/\/[\w\-.~%/?#[\]@!$&'()*+,;=:]+)|(www\.[\w\-.~%/?#[\]@!$&'()*+,;=:]+)/gi,
+    (match) => {
+      const href = match.startsWith('http') ? match : `https://${match}`
+      return `<a href="${href}" target="_blank" rel="noreferrer">${match}</a>`
+    },
+  )
+  return withLinks.replace(/\n/g, '<br />')
 }
 
 const normalizeSocketUrl = (value: string): string | null => {
@@ -181,6 +248,8 @@ function App() {
   const containerRefs = useRef(new Map<string, HTMLDivElement | null>())
   const overlayRefs = useRef(new Map<string, HTMLDivElement | null>())
   const playerRefs = useRef(new Map<string, YouTubePlayer>())
+  const socketRef = useRef<WebSocket | null>(null)
+  const requestedPublicKeysRef = useRef(new Set<string>())
 
   const publicKeysByVideoKey = useMemo(() => {
     const entries: Array<[string, string]> = []
@@ -444,18 +513,50 @@ function App() {
       return undefined
     }
 
+    socketRef.current = socket
+    requestedPublicKeysRef.current.clear()
+
+    const sendGraphRequest = (publicKey: string) => {
+      socket?.send(
+        JSON.stringify({
+          type: 'get_graph',
+          body: {
+            public_key: publicKey,
+          },
+        }),
+      )
+    }
+
     socket.addEventListener('open', () => {
-      socket?.send(JSON.stringify(GRAPH_REQUEST_BODY))
+      sendGraphRequest(DEFAULT_GRAPH_REQUEST_PUBLIC_KEY)
+      publicKeysByVideoKey.forEach((publicKey) => {
+        sendGraphRequest(publicKey)
+        requestedPublicKeysRef.current.add(publicKey)
+      })
     })
 
     socket.addEventListener('message', (event) => {
       try {
         const data = JSON.parse(event.data)
         if (data?.type === 'graph' && typeof data.body?.graph === 'string') {
-          const graphVideos = parseGraphVideos(data.body.graph)
-          if (graphVideos.length) {
-            setVideos(graphVideos)
-          }
+          const nodes = parseGraphNodes(data.body.graph)
+
+          setVideos((previous) => {
+            const graphVideos = parseGraphVideos(nodes)
+            const baseVideos = graphVideos.length ? graphVideos : previous
+
+            return baseVideos.map((video) => {
+              const tagPoints = parseTagPointsForNamespace(nodes, video.namespace)
+              if (tagPoints.length) {
+                return {
+                  ...video,
+                  points: tagPoints,
+                }
+              }
+
+              return video
+            })
+          })
         }
       } catch (error) {
         console.error('Error parsing graph message', error)
@@ -473,8 +574,32 @@ function App() {
 
     return () => {
       socket?.close()
+      socketRef.current = null
     }
   }, [socketUrl, socketVersion])
+
+  useEffect(() => {
+    const socket = socketRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return
+    }
+
+    publicKeysByVideoKey.forEach((publicKey) => {
+      if (requestedPublicKeysRef.current.has(publicKey)) {
+        return
+      }
+
+      socket.send(
+        JSON.stringify({
+          type: 'get_graph',
+          body: {
+            public_key: publicKey,
+          },
+        }),
+      )
+      requestedPublicKeysRef.current.add(publicKey)
+    })
+  }, [publicKeysByVideoKey])
 
   const handleSocketSubmit = useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
@@ -540,7 +665,7 @@ function App() {
             ? {
                 ...video,
                 points: video.points.map((point) =>
-                  point.id === pointId
+                  point.id === pointId && !point.isReadOnly
                     ? {
                         ...point,
                         note,
@@ -775,6 +900,19 @@ function App() {
                   {activePoints.map((point) => {
                     const isEditing =
                       editingPoint?.videoKey === video.key && editingPoint.pointId === point.id
+                    const canEdit = !point.isReadOnly
+
+                    const calloutContent = (
+                      <>
+                        <span className="poi-callout__time">{formatTimecode(point.time)}</span>
+                        <span
+                          className="poi-callout__note"
+                          dangerouslySetInnerHTML={{
+                            __html: formatMemoHtml(point.note || 'Add a note'),
+                          }}
+                        />
+                      </>
+                    )
 
                     return (
                       <div
@@ -785,8 +923,7 @@ function App() {
                           top: `${point.yPercent}%`,
                         }}
                       >
-                        <span className="poi-callout__time">{formatTimecode(point.time)}</span>
-                        {isEditing ? (
+                        {canEdit && isEditing ? (
                           <div className="poi-editor">
                             <input
                               autoFocus
@@ -813,16 +950,16 @@ function App() {
                               </button>
                             </div>
                           </div>
-                        ) : (
+                        ) : canEdit ? (
                           <button
                             type="button"
                             className="poi-marker__trigger"
                             onClick={() => startEditingPoint(video.key, point.id)}
                           >
-                            <span className="poi-callout__note">
-                              {point.note ? point.note : 'Add a note'}
-                            </span>
+                            {calloutContent}
                           </button>
+                        ) : (
+                          <div className="poi-marker__content">{calloutContent}</div>
                         )}
                       </div>
                     )
