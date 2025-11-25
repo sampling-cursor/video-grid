@@ -35,7 +35,7 @@ const MAX_GRID_SCALE = 4
 const VISIBLE_POINT_WINDOW = 1.5
 
 const DEFAULT_VIDEO_IDS = ['tVlzKzKXjRw', 'aqz-KE-bpKQ', 'M7lc1UVf-VE']
-const GRAPH_SOCKET_URL =
+const DEFAULT_GRAPH_SOCKET_URL =
   'wss://ungallant-unimpeding-kade.ngrok-free.dev/0000000e9894eb8fe2c8c5f330ff78210eb909bc683a2fe89a9e2233fabf5354'
 const GRAPH_SOCKET_PROTOCOLS = ['consequence.1']
 const GRAPH_REQUEST_BODY = {
@@ -153,6 +153,8 @@ function App() {
     pointId: string
   } | null>(null)
   const [playbackStates, setPlaybackStates] = useState<Record<string, PlaybackState>>({})
+  const [socketUrl, setSocketUrl] = useState(DEFAULT_GRAPH_SOCKET_URL)
+  const [socketError, setSocketError] = useState<string | null>(null)
 
   const containerRefs = useRef(new Map<string, HTMLDivElement | null>())
   const overlayRefs = useRef(new Map<string, HTMLDivElement | null>())
@@ -403,10 +405,24 @@ function App() {
   )
 
   useEffect(() => {
-    const socket = new WebSocket(GRAPH_SOCKET_URL, GRAPH_SOCKET_PROTOCOLS)
+    if (!socketUrl.trim()) {
+      setSocketError('Enter a WebSocket URL to load graph data.')
+      return undefined
+    }
+
+    let socket: WebSocket | null = null
+
+    try {
+      socket = new WebSocket(socketUrl, GRAPH_SOCKET_PROTOCOLS)
+      setSocketError(null)
+    } catch (error) {
+      console.error('Error creating WebSocket', error)
+      setSocketError('Unable to connect with the provided WebSocket URL.')
+      return undefined
+    }
 
     socket.addEventListener('open', () => {
-      socket.send(JSON.stringify(GRAPH_REQUEST_BODY))
+      socket?.send(JSON.stringify(GRAPH_REQUEST_BODY))
     })
 
     socket.addEventListener('message', (event) => {
@@ -425,12 +441,17 @@ function App() {
 
     socket.addEventListener('error', (event) => {
       console.error('WebSocket error', event)
+      setSocketError('WebSocket connection error. Check the URL and try again.')
+    })
+
+    socket.addEventListener('close', () => {
+      setSocketError((previous) => previous ?? 'WebSocket connection closed.')
     })
 
     return () => {
-      socket.close()
+      socket?.close()
     }
-  }, [])
+  }, [socketUrl])
 
   const clampGridScale = useCallback(
     (scale: number) => Math.min(MAX_GRID_SCALE, Math.max(MIN_GRID_SCALE, scale)),
@@ -632,14 +653,6 @@ function App() {
 
   return (
     <div className="app">
-      <header className="app__header">
-        <h1>Vertical Video Annotator</h1>
-        <p className="app__subtitle">
-          Scroll through the feed, automatically focus on the active video, and tap the grid to
-          capture annotations in real time.
-        </p>
-      </header>
-
       <div className="feed">
         {videos.map((video) => {
           const playback = playbackStates[video.key] ?? { currentTime: 0, duration: 0 }
@@ -823,6 +836,24 @@ function App() {
               Close
             </button>
           </header>
+
+          <section className="drawer__section">
+            <h3>WebSocket</h3>
+            <label className="field">
+              <span className="field__label">Graph WebSocket URL</span>
+              <input
+                value={socketUrl}
+                onChange={(event) => setSocketUrl(event.target.value)}
+                placeholder={DEFAULT_GRAPH_SOCKET_URL}
+                className={socketError ? 'field__input field__input--error' : 'field__input'}
+              />
+            </label>
+            {socketError ? (
+              <p className="field__error" role="alert">
+                {socketError}
+              </p>
+            ) : null}
+          </section>
 
           <section className="drawer__section">
             <h3>Add a video</h3>
