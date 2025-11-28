@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { SyntheticEvent } from 'react'
 import YouTube from 'react-youtube'
 import type { YouTubeEvent, YouTubePlayer } from 'react-youtube'
 import './App.css'
@@ -192,18 +193,66 @@ const parseTagPointsForNamespace = (nodes: GraphNode[], namespace?: string): Poi
 const escapeHtml = (value: string): string =>
   value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
 
+const normalizeLinkHref = (href: string): string | null => {
+  const trimmed = href.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  const candidate = trimmed.startsWith('http://') || trimmed.startsWith('https://')
+    ? trimmed
+    : `https://${trimmed}`
+
+  try {
+    const url = new URL(candidate)
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      return null
+    }
+
+    return url.toString()
+  } catch (error) {
+    return null
+  }
+}
+
 const formatMemoHtml = (memo: string): string => {
   const escaped = escapeHtml(memo)
-  const withBold = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-  const withItalics = withBold.replace(/(^|\s)_(.+?)_([^\w]|$)/g, '$1<em>$2</em>$3').replace(/\*(.+?)\*/g, '<em>$1</em>')
+  const anchorPlaceholders: string[] = []
+
+  const withMarkdownLinks = escaped.replace(/\[([^\]]+)]\(([^)]+)\)/g, (_, label, href) => {
+    const normalized = normalizeLinkHref(href)
+    if (!normalized) {
+      return label
+    }
+
+    const anchor = `<a href="${normalized}" target="_blank" rel="noreferrer">${label}</a>`
+    anchorPlaceholders.push(anchor)
+    return `[[[ANCHOR_${anchorPlaceholders.length - 1}]]]`
+  })
+
+  const withBold = withMarkdownLinks.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+  const withItalics = withBold
+    .replace(/(^|\s)_(.+?)_([^\w]|$)/g, '$1<em>$2</em>$3')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+
   const withLinks = withItalics.replace(
     /(https?:\/\/[\w\-.~%/?#[\]@!$&'()*+,;=:]+)|(www\.[\w\-.~%/?#[\]@!$&'()*+,;=:]+)/gi,
     (match) => {
-      const href = match.startsWith('http') ? match : `https://${match}`
+      const href = normalizeLinkHref(match)
+      if (!href) {
+        return match
+      }
+
       return `<a href="${href}" target="_blank" rel="noreferrer">${match}</a>`
     },
   )
-  return withLinks.replace(/\n/g, '<br />')
+
+  const withBreaks = withLinks.replace(/\n/g, '<br />')
+
+  return withBreaks.replace(/\[\[\[ANCHOR_(\d+)]]]/g, (_, index) => {
+    const anchorIndex = Number.parseInt(index, 10)
+    return Number.isNaN(anchorIndex) ? '' : anchorPlaceholders[anchorIndex] ?? ''
+  })
 }
 
 const normalizeSocketUrl = (value: string): string | null => {
@@ -498,6 +547,13 @@ function App() {
       },
     [activeVideoKey],
   )
+
+  const handleCalloutInteraction = useCallback((event: SyntheticEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement | null
+    if (target?.closest('a')) {
+      event.stopPropagation()
+    }
+  }, [])
 
   const handleAddVideo = useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
@@ -942,7 +998,11 @@ function App() {
                     const canEdit = !point.isReadOnly
 
                     const calloutContent = (
-                      <>
+                      <div
+                        className="poi-callout"
+                        onClickCapture={handleCalloutInteraction}
+                        onPointerDownCapture={handleCalloutInteraction}
+                      >
                         <span className="poi-callout__time">{formatTimecode(point.time)}</span>
                         <span
                           className="poi-callout__note"
@@ -950,7 +1010,7 @@ function App() {
                             __html: formatMemoHtml(point.note || 'Add a note'),
                           }}
                         />
-                      </>
+                      </div>
                     )
 
                     return (

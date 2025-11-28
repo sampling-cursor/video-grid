@@ -311,6 +311,13 @@
   z-index: 2;
 }
 
+.poi-callout {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+}
+
 .poi-callout__time {
   padding: 0.25rem 0.5rem;
   border-radius: 999px;
@@ -328,6 +335,16 @@
   font-size: 0.75rem;
   max-width: 180px;
   word-break: break-word;
+}
+
+.poi-callout__note a {
+  color: #0ea5e9;
+  text-decoration: underline;
+}
+
+.poi-callout__note a:hover,
+.poi-callout__note a:focus-visible {
+  color: #075985;
 }
 
 .poi-editor {
