@@ -313,27 +313,38 @@
 
 .poi-callout {
   display: inline-flex;
-  flex-direction: column;
   align-items: center;
-  gap: 0.2rem;
+  justify-content: center;
+}
+
+.poi-callout__card {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 14px;
+  background: rgba(236, 254, 255, 0.96);
+  border: 1px solid rgba(14, 165, 233, 0.25);
+  box-shadow: 0 10px 22px rgba(14, 165, 233, 0.18);
+  backdrop-filter: blur(6px);
 }
 
 .poi-callout__time {
-  padding: 0.25rem 0.5rem;
+  padding: 0.22rem 0.55rem;
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.85);
+  background: linear-gradient(120deg, #0ea5e9, #0ea5e9 50%, #0284c7);
   color: #f8fafc;
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: 0 6px 14px rgba(14, 165, 233, 0.35);
 }
 
 .poi-callout__note {
-  padding: 0.3rem 0.6rem;
-  border-radius: 12px;
-  background: rgba(236, 254, 255, 0.85);
   color: #0f172a;
   font-size: 0.75rem;
-  max-width: 180px;
+  line-height: 1.35;
+  max-width: 200px;
   word-break: break-word;
 }
 

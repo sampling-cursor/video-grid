@@ -1003,13 +1003,15 @@ function App() {
                         onClickCapture={handleCalloutInteraction}
                         onPointerDownCapture={handleCalloutInteraction}
                       >
-                        <span className="poi-callout__time">{formatTimecode(point.time)}</span>
-                        <span
-                          className="poi-callout__note"
-                          dangerouslySetInnerHTML={{
-                            __html: formatMemoHtml(point.note || 'Add a note'),
-                          }}
-                        />
+                        <div className="poi-callout__card">
+                          <span className="poi-callout__time">{formatTimecode(point.time)}</span>
+                          <span
+                            className="poi-callout__note"
+                            dangerouslySetInnerHTML={{
+                              __html: formatMemoHtml(point.note || 'Add a note'),
+                            }}
+                          />
+                        </div>
                       </div>
                     )
 
