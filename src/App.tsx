@@ -37,7 +37,7 @@ const VISIBLE_POINT_WINDOW = 1.5
 
 const DEFAULT_VIDEO_IDS = ['tVlzKzKXjRw', 'aqz-KE-bpKQ', 'M7lc1UVf-VE']
 const DEFAULT_GRAPH_SOCKET_URL =
-  'wss://ungallant-unimpeding-kade.ngrok-free.dev/00000063e8951c027db2a54567aa9798c71b1820cffdb096a61e72fe82f6d8e0'
+  'wss://ungallant-unimpeding-kade.ngrok-free.dev/00000000ef1ee3facd6972bcaf3e5859b7662ecb2ca208875df0106189eb740b'
 const GRAPH_SOCKET_PROTOCOLS = ['consequence.1']
 const DEFAULT_GRAPH_REQUEST_PUBLIC_KEY = '0000000000000000000000000000000000000000000='
 
