@@ -232,10 +232,7 @@ function App() {
   )
   const [gridScale, setGridScale] = useState(1)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
-  const [isAnnotationLocked, setIsAnnotationLocked] = useState(false)
-  const [isShiftHeld, setIsShiftHeld] = useState(false)
-  const [isTouchDevice, setIsTouchDevice] = useState(false)
-  const [isTouchAnnotationActive, setIsTouchAnnotationActive] = useState(false)
+  const [isAnnotationSessionActive, setIsAnnotationSessionActive] = useState(false)
   const [videoInput, setVideoInput] = useState('')
   const [videoError, setVideoError] = useState<string | null>(null)
   const [activeVideoKey, setActiveVideoKey] = useState<string | null>(null)
@@ -254,7 +251,7 @@ function App() {
   const playerRefs = useRef(new Map<string, YouTubePlayer>())
   const socketRef = useRef<WebSocket | null>(null)
   const requestedPublicKeysRef = useRef(new Set<string>())
-  const touchAnnotationTimeoutRef = useRef<number | null>(null)
+  const annotationSessionTimeoutRef = useRef<number | null>(null)
 
   const publicKeysByVideoKey = useMemo(() => {
     const entries: Array<[string, string]> = []
@@ -297,19 +294,19 @@ function App() {
   )
 
   const isAnnotationInteractionEnabled = useMemo(
-    () => isAnnotationLocked || isShiftHeld || isTouchAnnotationActive || Boolean(editingPoint),
-    [isAnnotationLocked, isShiftHeld, isTouchAnnotationActive, editingPoint],
+    () => isAnnotationSessionActive || Boolean(editingPoint),
+    [isAnnotationSessionActive, editingPoint],
   )
 
-  const startTouchAnnotationSession = useCallback(() => {
-    setIsTouchAnnotationActive(true)
+  const startAnnotationSession = useCallback(() => {
+    setIsAnnotationSessionActive(true)
 
-    if (touchAnnotationTimeoutRef.current) {
-      clearTimeout(touchAnnotationTimeoutRef.current)
+    if (annotationSessionTimeoutRef.current) {
+      clearTimeout(annotationSessionTimeoutRef.current)
     }
 
-    touchAnnotationTimeoutRef.current = window.setTimeout(() => {
-      setIsTouchAnnotationActive(false)
+    annotationSessionTimeoutRef.current = window.setTimeout(() => {
+      setIsAnnotationSessionActive(false)
     }, 5000)
   }, [])
 
@@ -398,55 +395,17 @@ function App() {
   }, [activeVideoKey])
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia('(pointer: coarse)')
-    const updateTouchCapability = (event?: MediaQueryListEvent) => {
-      setIsTouchDevice(event ? event.matches : mediaQuery.matches)
-    }
+    const handlePageHide = () => setIsAnnotationSessionActive(false)
 
-    updateTouchCapability()
-    mediaQuery.addEventListener('change', updateTouchCapability)
-
-    const handleTouchStart = () => setIsTouchDevice(true)
-    const handlePageHide = () => setIsTouchAnnotationActive(false)
-
-    window.addEventListener('touchstart', handleTouchStart, { passive: true })
     window.addEventListener('pagehide', handlePageHide)
 
     return () => {
-      mediaQuery.removeEventListener('change', updateTouchCapability)
-      window.removeEventListener('touchstart', handleTouchStart)
       window.removeEventListener('pagehide', handlePageHide)
 
-      if (touchAnnotationTimeoutRef.current) {
-        clearTimeout(touchAnnotationTimeoutRef.current)
-        touchAnnotationTimeoutRef.current = null
+      if (annotationSessionTimeoutRef.current) {
+        clearTimeout(annotationSessionTimeoutRef.current)
+        annotationSessionTimeoutRef.current = null
       }
-    }
-  }, [])
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Shift') {
-        setIsShiftHeld(true)
-      }
-    }
-
-    const handleKeyUp = (event: KeyboardEvent) => {
-      if (event.key === 'Shift') {
-        setIsShiftHeld(false)
-      }
-    }
-
-    const handleWindowBlur = () => setIsShiftHeld(false)
-
-    window.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('keyup', handleKeyUp)
-    window.addEventListener('blur', handleWindowBlur)
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('keyup', handleKeyUp)
-      window.removeEventListener('blur', handleWindowBlur)
     }
   }, [])
 
@@ -1047,49 +1006,23 @@ function App() {
                 </div>
               </div>
 
-              {isTouchDevice ? (
-                <div className="annotation-touch-inline">
-                  <button
-                    type="button"
-                    className={
-                      isAnnotationInteractionEnabled
-                        ? 'annotation-touch-inline__button annotation-touch-inline__button--active'
-                        : 'annotation-touch-inline__button'
-                    }
-                    onClick={startTouchAnnotationSession}
-                    aria-pressed={isAnnotationInteractionEnabled ? 'true' : 'false'}
-                  >
-                    {isAnnotationInteractionEnabled ? 'Annotating for 5s' : 'Annotate (touch)'}
-                  </button>
-                  <span className="annotation-touch-inline__note">
-                    Tap to enable annotations for 5 seconds without blocking playback controls. Use the lock
-                    toggle to stay in annotate mode.
-                  </span>
-                </div>
-              ) : null}
-
-              <div className="annotation-controls">
-                <div className="annotation-controls__status">
-                  <span className="annotation-controls__mode">
-                    {isAnnotationInteractionEnabled ? 'Annotation mode active' : 'Playback-first mode'}
-                  </span>
-                  <span className="annotation-controls__hint">
-                    {isTouchDevice
-                      ? 'Tap the Annotate button on touch devices to temporarily enable tagging or lock annotation mode.'
-                      : 'Hold Shift to place or edit annotations without blocking the YouTube player.'}
-                  </span>
-                </div>
+              <div className="annotation-inline">
                 <button
                   type="button"
                   className={
-                    isAnnotationLocked
-                      ? 'annotation-controls__toggle annotation-controls__toggle--active'
-                      : 'annotation-controls__toggle'
+                    isAnnotationInteractionEnabled
+                      ? 'annotation-inline__button annotation-inline__button--active'
+                      : 'annotation-inline__button'
                   }
-                  onClick={() => setIsAnnotationLocked((previous) => !previous)}
+                  onClick={startAnnotationSession}
+                  aria-pressed={isAnnotationInteractionEnabled ? 'true' : 'false'}
                 >
-                  {isAnnotationLocked ? 'Disable annotation lock' : 'Lock annotation mode'}
+                  {isAnnotationInteractionEnabled ? 'Annotating for 5s' : 'Annotate'}
                 </button>
+                <span className="annotation-inline__note">
+                  Click or tap Annotate to enable tagging for 5 seconds without blocking playback controls. Continue
+                  editing a note to keep annotation inputs active.
+                </span>
               </div>
 
               {playback.duration > 0 ? (
