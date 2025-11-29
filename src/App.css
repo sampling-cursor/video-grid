@@ -142,13 +142,15 @@
 .video-stage {
   position: relative;
   border-radius: 20px;
-  overflow: hidden;
+  overflow: visible;
   background: #000;
 }
 
 .video-stage__frame {
   position: relative;
   width: 100%;
+  border-radius: 20px;
+  overflow: hidden;
 }
 
 .video-stage__player {
