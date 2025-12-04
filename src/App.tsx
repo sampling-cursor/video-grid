@@ -939,12 +939,17 @@ function App() {
       const graphAwareWindow = newWindow as Window & { initialGraph?: string }
       graphAwareWindow.initialGraph = graphSource
 
-      const documentHandle = graphAwareWindow.document
-      documentHandle.open()
-      documentHandle.write(buildGraphWindowHtml())
-      documentHandle.close()
+      const html = buildGraphWindowHtml()
+      const blob = new Blob([html], { type: 'text/html' })
+      const blobUrl = URL.createObjectURL(blob)
+
+      graphAwareWindow.location.href = blobUrl
       graphAwareWindow.focus()
       graphWindowRef.current = graphAwareWindow
+
+      graphAwareWindow.addEventListener('unload', () => {
+        URL.revokeObjectURL(blobUrl)
+      })
     }, [buildGraphWindowHtml, graphSource])
 
   const clampGridScale = useCallback(
