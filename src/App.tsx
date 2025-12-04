@@ -752,7 +752,7 @@ function App() {
       const parsedNodes = Array.from(nodeMap.values()).map<NodeObject>((node) => ({
         ...node,
         id: node.id,
-        label: node.memo || node.id,
+        label: node.label || node.id,
       }))
 
       const parsedLinks = links.map<LinkObject>((link) => ({
