@@ -1,6 +1,8 @@
-import { instance as createVizInstance } from '@viz-js/viz'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SyntheticEvent } from 'react'
+import ForceGraph2D from 'react-force-graph-2d'
+import type { ForceGraphMethods } from 'react-force-graph-2d'
+import type { LinkObject, NodeObject } from 'force-graph'
 import YouTube from 'react-youtube'
 import type { YouTubeEvent, YouTubePlayer } from 'react-youtube'
 import './App.css'
@@ -43,7 +45,15 @@ const DEFAULT_GRAPH_SOCKET_URL =
 const GRAPH_SOCKET_PROTOCOLS = ['consequence.1']
 const DEFAULT_GRAPH_REQUEST_PUBLIC_KEY = '0000000000000000000000000000000000000000000='
 
-type GraphNode = Record<string, string>
+type GraphNode = {
+  id: string
+  [key: string]: string
+}
+
+type GraphLink = {
+  source: string
+  target: string
+}
 
 const extractVideoId = (value: string): string | null => {
   const trimmed = value.trim()
@@ -108,9 +118,9 @@ const createVideoTrack = (videoId: string, source: string, namespace?: string): 
 }
 
 const parseGraphNodes = (dotGraph: string): GraphNode[] =>
-  Array.from(dotGraph.matchAll(/"[^"]+"\s*\[(.*?)\];/g)).map((match) => {
-    const attributes = match[1]
-    const parsedAttributes: GraphNode = {}
+  Array.from(dotGraph.matchAll(/"([^"]+)"\s*(?:\[(.*?)\])?;/g)).map((match) => {
+    const [, id, attributes = ''] = match
+    const parsedAttributes: GraphNode = { id }
 
     for (const attribute of attributes.matchAll(/(\w+)="([^"]*)"/g)) {
       const [, key, value] = attribute
@@ -119,6 +129,12 @@ const parseGraphNodes = (dotGraph: string): GraphNode[] =>
 
     return parsedAttributes
   })
+
+const parseGraphLinks = (dotGraph: string): GraphLink[] =>
+  Array.from(dotGraph.matchAll(/"([^"]+)"\s*->\s*"([^"]+)"/g)).map((match) => ({
+    source: match[1],
+    target: match[2],
+  }))
 
 const parseGraphVideos = (nodes: GraphNode[]): VideoTrack[] => {
   const tracks: VideoTrack[] = []
@@ -296,10 +312,10 @@ function App() {
   const [socketVersion, setSocketVersion] = useState(0)
   const [socketError, setSocketError] = useState<string | null>(null)
   const [graphDot, setGraphDot] = useState<string | null>(null)
-  const [graphSvg, setGraphSvg] = useState<string | null>(null)
+  const [graphData, setGraphData] = useState<{ nodes: NodeObject[]; links: LinkObject[] } | null>(null)
   const [graphRenderError, setGraphRenderError] = useState<string | null>(null)
   const [isGraphModalOpen, setIsGraphModalOpen] = useState(false)
-  const [isGraphRendering, setIsGraphRendering] = useState(false)
+  const [graphSize, setGraphSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 })
 
   const containerRefs = useRef(new Map<string, HTMLDivElement | null>())
   const overlayRefs = useRef(new Map<string, HTMLDivElement | null>())
@@ -307,6 +323,8 @@ function App() {
   const socketRef = useRef<WebSocket | null>(null)
   const requestedPublicKeysRef = useRef(new Set<string>())
   const annotationSessionTimeoutRef = useRef<number | null>(null)
+  const graphRef = useRef<ForceGraphMethods<NodeObject, LinkObject> | undefined>(undefined)
+  const graphContainerRef = useRef<HTMLDivElement | null>(null)
 
   const publicKeysByVideoKey = useMemo(() => {
     const entries: Array<[string, string]> = []
@@ -702,46 +720,82 @@ function App() {
 
   useEffect(() => {
     if (!graphDot) {
-      setGraphSvg(null)
+      setGraphData(null)
       setGraphRenderError(null)
-      setIsGraphRendering(false)
       return
     }
 
-    let isActive = true
+    try {
+      const nodes = parseGraphNodes(graphDot)
+      const links = parseGraphLinks(graphDot)
+      const nodeMap = new Map<string, GraphNode>()
 
-    const renderGraph = async () => {
-      try {
-        setIsGraphRendering(true)
-        const viz = await createVizInstance()
-        const svg = viz.renderString(graphDot, { format: 'svg', engine: 'dot' })
-        if (!isActive) {
-          return
+      nodes.forEach((node) => {
+        nodeMap.set(node.id, node)
+      })
+
+      links.forEach((link) => {
+        const source = String(link.source)
+        const target = String(link.target)
+
+        if (!nodeMap.has(source)) {
+          nodeMap.set(source, { id: source })
         }
 
-        setGraphSvg(svg)
-        setGraphRenderError(null)
-      } catch (error) {
-        console.error('Error rendering graph', error)
-        if (!isActive) {
-          return
+        if (!nodeMap.has(target)) {
+          nodeMap.set(target, { id: target })
         }
+      })
 
-        setGraphSvg(null)
-        setGraphRenderError('Unable to render graph layout.')
-      } finally {
-        if (isActive) {
-          setIsGraphRendering(false)
-        }
-      }
-    }
+      const parsedNodes = Array.from(nodeMap.values()).map<NodeObject>((node) => ({
+        ...node,
+        id: node.id,
+        label: node.memo || node.id,
+      }))
 
-    renderGraph()
+      const parsedLinks = links.map<LinkObject>((link) => ({
+        ...link,
+      }))
 
-    return () => {
-      isActive = false
+      setGraphData({
+        nodes: parsedNodes,
+        links: parsedLinks,
+      })
+      setGraphRenderError(null)
+    } catch (error) {
+      console.error('Error parsing graph data', error)
+      setGraphData(null)
+      setGraphRenderError('Unable to parse graph data.')
     }
   }, [graphDot])
+
+  useEffect(() => {
+    const container = graphContainerRef.current
+    if (!container) {
+      return
+    }
+
+    const updateSize = () => {
+      setGraphSize({ width: container.clientWidth, height: container.clientHeight })
+    }
+
+    updateSize()
+
+    const resizeObserver = new ResizeObserver(updateSize)
+    resizeObserver.observe(container)
+
+    return () => {
+      resizeObserver.disconnect()
+    }
+  }, [isGraphModalOpen])
+
+  useEffect(() => {
+    if (!graphRef.current || !graphData || !graphSize.width || !graphSize.height) {
+      return
+    }
+
+    graphRef.current.zoomToFit(400, 40)
+  }, [graphData, graphSize])
 
   const handleSocketSubmit = useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
@@ -1326,14 +1380,33 @@ function App() {
               <p className="modal__message">No graph has been received yet. Connect a WebSocket feed to view it.</p>
             ) : (
               <div className="modal__graph">
-                {isGraphRendering ? <p className="modal__message">Rendering graph…</p> : null}
-                {graphSvg ? (
-                  <div
-                    className="modal__graph-figure"
-                    dangerouslySetInnerHTML={{ __html: graphSvg }}
-                    aria-hidden={isGraphRendering ? 'true' : 'false'}
-                  />
-                ) : null}
+                <div className="modal__graph-figure" ref={graphContainerRef} aria-live="polite">
+                  {graphData && graphSize.width && graphSize.height ? (
+                    <ForceGraph2D
+                      ref={graphRef}
+                      graphData={graphData}
+                      width={graphSize.width}
+                      height={graphSize.height}
+                      backgroundColor="#f8fafc"
+                      nodeAutoColorBy="namespace"
+                      nodeLabel={(node) =>
+                        typeof node === 'object' && node && 'label' in node
+                          ? String(node.label)
+                          : typeof node === 'object' && node && 'id' in node
+                            ? String(node.id)
+                            : 'node'
+                      }
+                      linkDirectionalArrowLength={4}
+                      linkDirectionalArrowRelPos={1}
+                      linkDirectionalParticles={1}
+                      linkDirectionalParticleWidth={2}
+                      linkCurvature={0.2}
+                      cooldownTicks={60}
+                    />
+                  ) : (
+                    <p className="modal__message">Preparing interactive graph…</p>
+                  )}
+                </div>
                 <details className="modal__details">
                   <summary>Show DOT source</summary>
                   <pre className="modal__dot">{graphDot}</pre>
