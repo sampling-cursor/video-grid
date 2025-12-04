@@ -1,3 +1,4 @@
+import { instance as createVizInstance } from '@viz-js/viz'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SyntheticEvent } from 'react'
 import YouTube from 'react-youtube'
@@ -294,6 +295,11 @@ function App() {
   const [socketUrlInput, setSocketUrlInput] = useState(DEFAULT_GRAPH_SOCKET_URL)
   const [socketVersion, setSocketVersion] = useState(0)
   const [socketError, setSocketError] = useState<string | null>(null)
+  const [graphDot, setGraphDot] = useState<string | null>(null)
+  const [graphSvg, setGraphSvg] = useState<string | null>(null)
+  const [graphRenderError, setGraphRenderError] = useState<string | null>(null)
+  const [isGraphModalOpen, setIsGraphModalOpen] = useState(false)
+  const [isGraphRendering, setIsGraphRendering] = useState(false)
 
   const containerRefs = useRef(new Map<string, HTMLDivElement | null>())
   const overlayRefs = useRef(new Map<string, HTMLDivElement | null>())
@@ -629,7 +635,10 @@ function App() {
       try {
         const data = JSON.parse(event.data)
         if (data?.type === 'graph' && typeof data.body?.graph === 'string') {
-          const nodes = parseGraphNodes(data.body.graph)
+          const dotGraph = data.body.graph as string
+          setGraphDot(dotGraph)
+
+          const nodes = parseGraphNodes(dotGraph)
 
           setVideos((previous) => {
             const graphVideos = parseGraphVideos(nodes)
@@ -690,6 +699,49 @@ function App() {
       requestedPublicKeysRef.current.add(publicKey)
     })
   }, [publicKeysByVideoKey])
+
+  useEffect(() => {
+    if (!graphDot) {
+      setGraphSvg(null)
+      setGraphRenderError(null)
+      setIsGraphRendering(false)
+      return
+    }
+
+    let isActive = true
+
+    const renderGraph = async () => {
+      try {
+        setIsGraphRendering(true)
+        const viz = await createVizInstance()
+        const svg = viz.renderString(graphDot, { format: 'svg', engine: 'dot' })
+        if (!isActive) {
+          return
+        }
+
+        setGraphSvg(svg)
+        setGraphRenderError(null)
+      } catch (error) {
+        console.error('Error rendering graph', error)
+        if (!isActive) {
+          return
+        }
+
+        setGraphSvg(null)
+        setGraphRenderError('Unable to render graph layout.')
+      } finally {
+        if (isActive) {
+          setIsGraphRendering(false)
+        }
+      }
+    }
+
+    renderGraph()
+
+    return () => {
+      isActive = false
+    }
+  }, [graphDot])
 
   const handleSocketSubmit = useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
@@ -1158,6 +1210,24 @@ function App() {
           </section>
 
           <section className="drawer__section">
+            <h3>Graph</h3>
+            <p className="drawer__description">
+              View the latest DOT graph returned from the WebSocket feed in a dedicated modal.
+            </p>
+            <div className="drawer__actions">
+              <button
+                type="button"
+                className="button"
+                onClick={() => setIsGraphModalOpen(true)}
+                aria-haspopup="dialog"
+              >
+                View graph
+              </button>
+              <span className="drawer__status">{graphDot ? 'Graph loaded' : 'Waiting for graph data'}</span>
+            </div>
+          </section>
+
+          <section className="drawer__section">
             <h3>Add a video</h3>
             <form className="drawer__form" onSubmit={handleAddVideo}>
               <label className="field">
@@ -1233,6 +1303,45 @@ function App() {
             )}
           </section>
         </aside>
+      </div>
+
+      <div className={isGraphModalOpen ? 'modal modal--open' : 'modal'} role="presentation">
+        <div className="modal__backdrop" onClick={() => setIsGraphModalOpen(false)} aria-hidden />
+        <div className="modal__panel" role="dialog" aria-modal="true" aria-label="Graph visualization">
+          <header className="modal__header">
+            <div className="modal__header-text">
+              <p className="modal__eyebrow">Live graph</p>
+              <h2 className="modal__title">Feed graph</h2>
+            </div>
+            <button type="button" className="modal__close" onClick={() => setIsGraphModalOpen(false)}>
+              Close
+            </button>
+          </header>
+
+          <div className="modal__content">
+            {graphRenderError ? (
+              <p className="modal__message modal__message--error">{graphRenderError}</p>
+            ) : null}
+            {!graphDot ? (
+              <p className="modal__message">No graph has been received yet. Connect a WebSocket feed to view it.</p>
+            ) : (
+              <div className="modal__graph">
+                {isGraphRendering ? <p className="modal__message">Rendering graph…</p> : null}
+                {graphSvg ? (
+                  <div
+                    className="modal__graph-figure"
+                    dangerouslySetInnerHTML={{ __html: graphSvg }}
+                    aria-hidden={isGraphRendering ? 'true' : 'false'}
+                  />
+                ) : null}
+                <details className="modal__details">
+                  <summary>Show DOT source</summary>
+                  <pre className="modal__dot">{graphDot}</pre>
+                </details>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   )
