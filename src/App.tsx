@@ -904,8 +904,10 @@ function App() {
       return
     }
 
-    newWindow.document.write(buildGraphWindowHtml(graphSource))
-    newWindow.document.close()
+    const documentHandle = newWindow.document
+    documentHandle.open()
+    documentHandle.write(buildGraphWindowHtml(graphSource))
+    documentHandle.close()
     newWindow.focus()
     graphWindowRef.current = newWindow
   }, [buildGraphWindowHtml, graphSource])
