@@ -3,7 +3,7 @@ import type { SyntheticEvent } from 'react'
 import ForceGraph3D from 'react-force-graph-3d'
 import type { ForceGraphMethods } from 'react-force-graph-3d'
 import type { LinkObject, NodeObject } from 'force-graph'
-import SpriteText from 'three-spritetext'
+import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import { Color, Group, Mesh, MeshStandardMaterial, SphereGeometry } from 'three'
 import YouTube from 'react-youtube'
 import type { YouTubeEvent, YouTubePlayer } from 'react-youtube'
@@ -318,6 +318,7 @@ function App() {
   const [graphRenderError, setGraphRenderError] = useState<string | null>(null)
   const [isGraphModalOpen, setIsGraphModalOpen] = useState(false)
   const [graphSize, setGraphSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 })
+  const graphRenderers = useMemo(() => [new CSS2DRenderer()], [])
 
   const containerRefs = useRef(new Map<string, HTMLDivElement | null>())
   const overlayRefs = useRef(new Map<string, HTMLDivElement | null>())
@@ -828,14 +829,22 @@ function App() {
         }),
       )
 
-      const label = new SpriteText(getNodeLabel(node))
-      label.color = '#e2e8f0'
-      label.textHeight = 6
-      label.backgroundColor = 'rgba(37, 99, 235, 0.9)'
-      label.padding = 4
-      label.borderRadius = 6
-      label.borderWidth = 1
-      label.borderColor = 'rgba(148, 163, 184, 0.75)'
+      const labelContainer = document.createElement('div')
+      labelContainer.className = 'graph-node__label'
+
+      const labelTitle = document.createElement('div')
+      labelTitle.className = 'graph-node__label-title'
+      labelTitle.textContent = getNodeLabel(node)
+      labelContainer.append(labelTitle)
+
+      if (typeof node === 'object' && node && 'id' in node) {
+        const labelMeta = document.createElement('div')
+        labelMeta.className = 'graph-node__label-meta'
+        labelMeta.textContent = String(node.id)
+        labelContainer.append(labelMeta)
+      }
+
+      const label = new CSS2DObject(labelContainer)
       label.position.set(0, 9, 0)
 
       group.add(sphere)
@@ -1437,8 +1446,10 @@ function App() {
                       width={graphSize.width}
                       height={graphSize.height}
                       backgroundColor="#0b1024"
+                      extraRenderers={graphRenderers}
                       nodeLabel={getNodeLabel}
                       nodeThreeObject={createNodeObject}
+                      nodeThreeObjectExtend
                       linkColor={() => '#94a3b8'}
                       linkOpacity={0.6}
                       linkDirectionalArrowLength={4}

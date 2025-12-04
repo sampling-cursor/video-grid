@@ -744,6 +744,33 @@
   position: relative;
 }
 
+.graph-node__label {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #e2e8f0;
+  background: rgba(30, 41, 59, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  padding: 6px 10px;
+  box-shadow: 0 10px 40px rgba(15, 23, 42, 0.4);
+  pointer-events: none;
+  min-width: 120px;
+  max-width: 220px;
+  backdrop-filter: blur(8px);
+}
+
+.graph-node__label-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.graph-node__label-meta {
+  font-size: 0.72rem;
+  color: #cbd5e1;
+  margin-top: 2px;
+  word-break: break-all;
+}
+
 .modal__details summary {
   cursor: pointer;
   font-weight: 700;
