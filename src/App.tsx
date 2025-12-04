@@ -614,16 +614,22 @@ function App() {
         return
       }
 
-      const targetWindow = event.source as Window | null
-      if (targetWindow && 'postMessage' in targetWindow) {
-        targetWindow.postMessage(
-          {
-            type: 'graph-update',
-            graph: graphSource,
-          },
-          '*',
-        )
+      const targetWindow =
+        (event.source as Window | null) ?? (graphWindowRef.current?.closed ? null : graphWindowRef.current)
+
+      if (!targetWindow || !('postMessage' in targetWindow)) {
+        return
       }
+
+      graphWindowRef.current = targetWindow
+
+      targetWindow.postMessage(
+        {
+          type: 'graph-update',
+          graph: graphSource,
+        },
+        '*',
+      )
     }
 
     window.addEventListener('message', handleGraphViewerReady)
