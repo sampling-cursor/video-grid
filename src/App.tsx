@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SyntheticEvent } from 'react'
-import ForceGraph2D from 'react-force-graph-2d'
-import type { ForceGraphMethods } from 'react-force-graph-2d'
+import ForceGraph3D from 'react-force-graph-3d'
+import type { ForceGraphMethods } from 'react-force-graph-3d'
 import type { LinkObject, NodeObject } from 'force-graph'
 import YouTube from 'react-youtube'
 import type { YouTubeEvent, YouTubePlayer } from 'react-youtube'
@@ -1382,7 +1382,7 @@ function App() {
               <div className="modal__graph">
                 <div className="modal__graph-figure" ref={graphContainerRef} aria-live="polite">
                   {graphData && graphSize.width && graphSize.height ? (
-                    <ForceGraph2D
+                    <ForceGraph3D
                       ref={graphRef}
                       graphData={graphData}
                       width={graphSize.width}
