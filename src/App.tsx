@@ -3,6 +3,8 @@ import type { SyntheticEvent } from 'react'
 import ForceGraph3D from 'react-force-graph-3d'
 import type { ForceGraphMethods } from 'react-force-graph-3d'
 import type { LinkObject, NodeObject } from 'force-graph'
+import SpriteText from 'three-spritetext'
+import { Color, Group, Mesh, MeshStandardMaterial, SphereGeometry } from 'three'
 import YouTube from 'react-youtube'
 import type { YouTubeEvent, YouTubePlayer } from 'react-youtube'
 import './App.css'
@@ -797,6 +799,53 @@ function App() {
     graphRef.current.zoomToFit(400, 40)
   }, [graphData, graphSize])
 
+  const getNodeLabel = useCallback((node: NodeObject) => {
+    if (typeof node === 'object' && node) {
+      if ('label' in node) {
+        return String(node.label)
+      }
+
+      if ('id' in node) {
+        return String(node.id)
+      }
+    }
+
+    return 'node'
+  }, [])
+
+  const createNodeObject = useCallback(
+    (node: NodeObject) => {
+      const group = new Group()
+
+      const sphere = new Mesh(
+        new SphereGeometry(6, 24, 24),
+        new MeshStandardMaterial({
+          color: new Color('#d7d3a0'),
+          emissive: new Color('#4c51bf'),
+          emissiveIntensity: 0.08,
+          metalness: 0.1,
+          roughness: 0.4,
+        }),
+      )
+
+      const label = new SpriteText(getNodeLabel(node))
+      label.color = '#e2e8f0'
+      label.textHeight = 6
+      label.backgroundColor = 'rgba(37, 99, 235, 0.9)'
+      label.padding = 4
+      label.borderRadius = 6
+      label.borderWidth = 1
+      label.borderColor = 'rgba(148, 163, 184, 0.75)'
+      label.position.set(0, 9, 0)
+
+      group.add(sphere)
+      group.add(label)
+
+      return group
+    },
+    [getNodeLabel],
+  )
+
   const handleSocketSubmit = useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault()
@@ -1387,19 +1436,16 @@ function App() {
                       graphData={graphData}
                       width={graphSize.width}
                       height={graphSize.height}
-                      backgroundColor="#f8fafc"
-                      nodeAutoColorBy="namespace"
-                      nodeLabel={(node) =>
-                        typeof node === 'object' && node && 'label' in node
-                          ? String(node.label)
-                          : typeof node === 'object' && node && 'id' in node
-                            ? String(node.id)
-                            : 'node'
-                      }
+                      backgroundColor="#0b1024"
+                      nodeLabel={getNodeLabel}
+                      nodeThreeObject={createNodeObject}
+                      linkColor={() => '#94a3b8'}
+                      linkOpacity={0.6}
                       linkDirectionalArrowLength={4}
                       linkDirectionalArrowRelPos={1}
-                      linkDirectionalParticles={1}
-                      linkDirectionalParticleWidth={2}
+                      linkDirectionalParticles={1.5}
+                      linkDirectionalParticleWidth={2.25}
+                      linkDirectionalParticleColor={() => '#cbd5e1'}
                       linkCurvature={0.2}
                       cooldownTicks={60}
                     />

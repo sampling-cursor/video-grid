@@ -18,6 +18,7 @@
     "react-force-graph-3d": "^1.29.0",
     "react-youtube": "^10.1.0",
     "three": "^0.181.2",
+    "three-spritetext": "^1.7.0",
     "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
@@ -25,6 +26,7 @@
     "@types/node": "^24.9.1",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
+    "@types/three": "^0.172.0",
     "@vitejs/plugin-react": "^5.1.0",
     "eslint": "^9.38.0",
     "eslint-plugin-react-hooks": "^5.2.0",

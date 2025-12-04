@@ -667,7 +667,10 @@
   width: min(960px, 95vw);
   max-height: 90vh;
   overflow: auto;
-  background: #ffffff;
+  background: radial-gradient(circle at 20% 20%, rgba(79, 70, 229, 0.08), rgba(15, 23, 42, 0))
+      no-repeat,
+    #0b1024;
+  color: #e2e8f0;
   border-radius: 20px;
   padding: 1.5rem;
   box-shadow: 0 30px 70px rgba(15, 23, 42, 0.35);
@@ -689,18 +692,19 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #6366f1;
+  color: #8b5cf6;
 }
 
 .modal__title {
   margin: 0;
   font-size: 1.35rem;
+  color: #f1f5f9;
 }
 
 .modal__close {
-  border: none;
-  background: rgba(99, 102, 241, 0.1);
-  color: #4338ca;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: rgba(79, 70, 229, 0.12);
+  color: #c7d2fe;
   padding: 0.5rem 0.8rem;
   border-radius: 10px;
   font-weight: 700;
@@ -715,7 +719,7 @@
 
 .modal__message {
   margin: 0;
-  color: #334155;
+  color: #cbd5e1;
   line-height: 1.6;
 }
 
@@ -732,8 +736,8 @@
 .modal__graph-figure {
   border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 14px;
-  background: radial-gradient(circle at top left, rgba(99, 102, 241, 0.04), transparent 60%),
-    #f8fafc;
+  background: radial-gradient(circle at 12% 20%, rgba(59, 130, 246, 0.08), transparent 45%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.65), rgba(15, 23, 42, 0.9));
   height: min(60vh, 640px);
   min-height: 320px;
   overflow: hidden;
