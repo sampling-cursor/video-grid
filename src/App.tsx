@@ -448,6 +448,10 @@ function App() {
         }
       })
 
+      if (window.opener) {
+        window.opener.postMessage({ type: 'graph-viewer-ready' }, '*')
+      }
+
       render()
     </script>
   </body>
@@ -603,6 +607,28 @@ function App() {
     }
     graphWindowRef.current = null
   }, [])
+
+  useEffect(() => {
+    const handleGraphViewerReady = (event: MessageEvent) => {
+      if (event.data?.type !== 'graph-viewer-ready') {
+        return
+      }
+
+      const targetWindow = event.source as Window | null
+      if (targetWindow && 'postMessage' in targetWindow) {
+        targetWindow.postMessage(
+          {
+            type: 'graph-update',
+            graph: graphSource,
+          },
+          '*',
+        )
+      }
+    }
+
+    window.addEventListener('message', handleGraphViewerReady)
+    return () => window.removeEventListener('message', handleGraphViewerReady)
+  }, [graphSource])
 
   useEffect(() => {
     const graphWindow = graphWindowRef.current
