@@ -579,6 +579,14 @@
   color: #1e293b;
 }
 
+.drawer__description,
+.drawer__hint {
+  margin: 0;
+  color: #475569;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
 .drawer__form {
   display: flex;
   flex-direction: column;
