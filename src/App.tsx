@@ -304,162 +304,158 @@ function App() {
   const annotationSessionTimeoutRef = useRef<number | null>(null)
   const graphWindowRef = useRef<Window | null>(null)
 
-    const buildGraphWindowHtml = useCallback(
-      (initialGraph: string) => {
-        const encodedGraph = encodeURIComponent(initialGraph)
+  const buildGraphWindowHtml = useCallback(
+      () => `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Graph viewer</title>
+  <style>
+    :root { color-scheme: light; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 0; background: #f8fafc; color: #0f172a; }
+    header { padding: 1rem 1.25rem; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; box-shadow: 0 12px 32px rgba(79, 70, 229, 0.25); position: sticky; top: 0; z-index: 2; }
+    h1 { margin: 0; font-size: 1.35rem; }
+    main { padding: 1.25rem; display: grid; gap: 1rem; grid-template-columns: 2fr 1fr; align-items: start; }
+    section { background: #fff; border-radius: 16px; box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08); border: 1px solid rgba(148, 163, 184, 0.18); padding: 1rem; }
+    .controls { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
+    .controls input { flex: 1 1 180px; padding: 0.5rem 0.65rem; border-radius: 10px; border: 1px solid #cbd5e1; font-size: 0.95rem; }
+    .controls button { padding: 0.5rem 0.85rem; border-radius: 10px; border: 1px solid rgba(79, 70, 229, 0.25); background: rgba(99, 102, 241, 0.1); color: #4338ca; cursor: pointer; font-weight: 700; }
+    .controls button:hover { background: rgba(99, 102, 241, 0.16); }
+    .chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0; padding: 0; list-style: none; }
+    .node-chip { padding: 0.45rem 0.65rem; border-radius: 999px; border: 1px solid rgba(148, 163, 184, 0.6); background: #f8fafc; cursor: pointer; font-size: 0.9rem; }
+    .node-chip:hover { border-color: #6366f1; color: #4338ca; }
+    .node-chip--active { background: rgba(99, 102, 241, 0.12); border-color: #4338ca; color: #312e81; box-shadow: 0 10px 24px rgba(99, 102, 241, 0.18); }
+    .edge-list { display: grid; gap: 0.5rem; margin: 0; padding: 0; list-style: none; }
+    .edge-card { border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 12px; padding: 0.65rem 0.75rem; background: #f8fafc; display: flex; flex-direction: column; gap: 0.2rem; }
+    .edge-card strong { color: #0f172a; }
+    .edge-card span { color: #334155; font-size: 0.9rem; }
+    textarea { width: 100%; min-height: 260px; border-radius: 12px; border: 1px solid #cbd5e1; padding: 0.75rem; background: #0f172a; color: #e2e8f0; font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 0.9rem; }
+    .status { margin: 0; color: #475569; font-size: 0.95rem; }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Graph code-behind window</h1>
+    <p style="margin: 0.25rem 0 0; opacity: 0.9;">Interact with nodes, filter edges, and watch updates from the feed.</p>
+  </header>
+  <main>
+    <section>
+      <div class="controls">
+        <input id="search" placeholder="Filter nodes by id" aria-label="Filter nodes" />
+        <button id="reset">Reset view</button>
+      </div>
+      <p id="status" class="status"></p>
+      <div id="nodes" class="chips" role="list"></div>
+      <div style="height: 1px; background: rgba(148,163,184,0.35); margin: 1rem 0;" aria-hidden="true"></div>
+      <ul id="edges" class="edge-list" aria-label="Graph edges"></ul>
+    </section>
+    <section>
+      <h3 style="margin-top: 0;">DOT source</h3>
+      <p style="margin-top: 0; color: #475569;">Live source data received from the WebSocket connection.</p>
+      <textarea id="source" readonly aria-label="Graph source"></textarea>
+    </section>
+  </main>
+    <script>
+      const state = { graphText: window.initialGraph || '', filter: '', selectedNode: '' }
 
-        return `<!doctype html>
-  <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Graph viewer</title>
-    <style>
-      :root { color-scheme: light; }
-      body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 0; background: #f8fafc; color: #0f172a; }
-      header { padding: 1rem 1.25rem; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; box-shadow: 0 12px 32px rgba(79, 70, 229, 0.25); position: sticky; top: 0; z-index: 2; }
-      h1 { margin: 0; font-size: 1.35rem; }
-      main { padding: 1.25rem; display: grid; gap: 1rem; grid-template-columns: 2fr 1fr; align-items: start; }
-      section { background: #fff; border-radius: 16px; box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08); border: 1px solid rgba(148, 163, 184, 0.18); padding: 1rem; }
-      .controls { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
-      .controls input { flex: 1 1 180px; padding: 0.5rem 0.65rem; border-radius: 10px; border: 1px solid #cbd5e1; font-size: 0.95rem; }
-      .controls button { padding: 0.5rem 0.85rem; border-radius: 10px; border: 1px solid rgba(79, 70, 229, 0.25); background: rgba(99, 102, 241, 0.1); color: #4338ca; cursor: pointer; font-weight: 700; }
-      .controls button:hover { background: rgba(99, 102, 241, 0.16); }
-      .chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0; padding: 0; list-style: none; }
-      .node-chip { padding: 0.45rem 0.65rem; border-radius: 999px; border: 1px solid rgba(148, 163, 184, 0.6); background: #f8fafc; cursor: pointer; font-size: 0.9rem; }
-      .node-chip:hover { border-color: #6366f1; color: #4338ca; }
-      .node-chip--active { background: rgba(99, 102, 241, 0.12); border-color: #4338ca; color: #312e81; box-shadow: 0 10px 24px rgba(99, 102, 241, 0.18); }
-      .edge-list { display: grid; gap: 0.5rem; margin: 0; padding: 0; list-style: none; }
-      .edge-card { border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 12px; padding: 0.65rem 0.75rem; background: #f8fafc; display: flex; flex-direction: column; gap: 0.2rem; }
-      .edge-card strong { color: #0f172a; }
-      .edge-card span { color: #334155; font-size: 0.9rem; }
-      textarea { width: 100%; min-height: 260px; border-radius: 12px; border: 1px solid #cbd5e1; padding: 0.75rem; background: #0f172a; color: #e2e8f0; font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 0.9rem; }
-      .status { margin: 0; color: #475569; font-size: 0.95rem; }
-      @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
-    </style>
-  </head>
-  <body>
-    <header>
-      <h1>Graph code-behind window</h1>
-      <p style="margin: 0.25rem 0 0; opacity: 0.9;">Interact with nodes, filter edges, and watch updates from the feed.</p>
-    </header>
-    <main>
-      <section>
-        <div class="controls">
-          <input id="search" placeholder="Filter nodes by id" aria-label="Filter nodes" />
-          <button id="reset">Reset view</button>
-        </div>
-        <p id="status" class="status"></p>
-        <div id="nodes" class="chips" role="list"></div>
-        <div style="height: 1px; background: rgba(148,163,184,0.35); margin: 1rem 0;" aria-hidden="true"></div>
-        <ul id="edges" class="edge-list" aria-label="Graph edges"></ul>
-      </section>
-      <section>
-        <h3 style="margin-top: 0;">DOT source</h3>
-        <p style="margin-top: 0; color: #475569;">Live source data received from the WebSocket connection.</p>
-        <textarea id="source" readonly aria-label="Graph source"></textarea>
-      </section>
-    </main>
-      <script>
-        const state = { graphText: decodeURIComponent(${JSON.stringify(encodedGraph)}), filter: '', selectedNode: '' }
+    const elements = {
+      search: document.getElementById('search'),
+      reset: document.getElementById('reset'),
+      nodes: document.getElementById('nodes'),
+      edges: document.getElementById('edges'),
+      source: document.getElementById('source'),
+      status: document.getElementById('status'),
+    }
 
-      const elements = {
-        search: document.getElementById('search'),
-        reset: document.getElementById('reset'),
-        nodes: document.getElementById('nodes'),
-        edges: document.getElementById('edges'),
-        source: document.getElementById('source'),
-        status: document.getElementById('status'),
+    const parseGraph = (text) => {
+      const nodeSet = new Set()
+      const edges = []
+      const edgePattern = /"([^\"]+)"\s*->\s*"([^\"]+)"/g
+      const nodePattern = /"([^\"]+)"\s*\[/g
+
+      for (const match of text.matchAll(edgePattern)) {
+        const [, from, to] = match
+        nodeSet.add(from)
+        nodeSet.add(to)
+        edges.push({ from, to })
       }
 
-      const parseGraph = (text) => {
-        const nodeSet = new Set()
-        const edges = []
-        const edgePattern = /"([^\"]+)"\s*->\s*"([^\"]+)"/g
-        const nodePattern = /"([^\"]+)"\s*\[/g
-
-        for (const match of text.matchAll(edgePattern)) {
-          const [, from, to] = match
-          nodeSet.add(from)
-          nodeSet.add(to)
-          edges.push({ from, to })
-        }
-
-        for (const match of text.matchAll(nodePattern)) {
-          nodeSet.add(match[1])
-        }
-
-        return { nodes: Array.from(nodeSet), edges }
+      for (const match of text.matchAll(nodePattern)) {
+        nodeSet.add(match[1])
       }
 
-      const render = () => {
-        const { nodes, edges } = parseGraph(state.graphText || '')
-        const filterValue = state.filter.trim().toLowerCase()
-        const filteredNodes = filterValue
-          ? nodes.filter((node) => node.toLowerCase().includes(filterValue))
-          : nodes
+      return { nodes: Array.from(nodeSet), edges }
+    }
 
-        elements.nodes.innerHTML = ''
-        filteredNodes.forEach((node) => {
-          const button = document.createElement('button')
-          button.type = 'button'
-          button.textContent = node
-          button.className = 'node-chip' + (node === state.selectedNode ? ' node-chip--active' : '')
-          button.onclick = () => {
-            state.selectedNode = state.selectedNode === node ? '' : node
-            render()
-          }
-          elements.nodes.appendChild(button)
-        })
+    const render = () => {
+      const { nodes, edges } = parseGraph(state.graphText || '')
+      const filterValue = state.filter.trim().toLowerCase()
+      const filteredNodes = filterValue
+        ? nodes.filter((node) => node.toLowerCase().includes(filterValue))
+        : nodes
 
-        const focusedEdges = state.selectedNode
-          ? edges.filter((edge) => edge.from === state.selectedNode || edge.to === state.selectedNode)
-          : edges
-
-        elements.edges.innerHTML = ''
-        focusedEdges.forEach((edge) => {
-          const item = document.createElement('li')
-          item.className = 'edge-card'
-          item.innerHTML = '<strong>' + edge.from + '</strong><span>to</span><strong>' + edge.to + '</strong>'
-          elements.edges.appendChild(item)
-        })
-
-        elements.source.value = state.graphText || 'Waiting for graph data...'
-        elements.status.textContent =
-          nodes.length + ' nodes · ' +
-          edges.length + ' edges' +
-          (state.selectedNode ? ' · focusing on "' + state.selectedNode + '"' : '') +
-          (filterValue ? ' · filtered by "' + state.filter + '"' : '')
-      }
-
-      elements.search.addEventListener('input', (event) => {
-        state.filter = event.target.value
-        render()
-      })
-
-      elements.reset.addEventListener('click', () => {
-        state.filter = ''
-        state.selectedNode = ''
-        elements.search.value = ''
-        render()
-      })
-
-      window.addEventListener('message', (event) => {
-        if (event.data?.type === 'graph-update') {
-          state.graphText = event.data.graph || ''
+      elements.nodes.innerHTML = ''
+      filteredNodes.forEach((node) => {
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.textContent = node
+        button.className = 'node-chip' + (node === state.selectedNode ? ' node-chip--active' : '')
+        button.onclick = () => {
+          state.selectedNode = state.selectedNode === node ? '' : node
           render()
         }
+        elements.nodes.appendChild(button)
       })
 
-      if (window.opener) {
-        window.opener.postMessage({ type: 'graph-viewer-ready' }, '*')
-      }
+      const focusedEdges = state.selectedNode
+        ? edges.filter((edge) => edge.from === state.selectedNode || edge.to === state.selectedNode)
+        : edges
 
+      elements.edges.innerHTML = ''
+      focusedEdges.forEach((edge) => {
+        const item = document.createElement('li')
+        item.className = 'edge-card'
+        item.innerHTML = '<strong>' + edge.from + '</strong><span>to</span><strong>' + edge.to + '</strong>'
+        elements.edges.appendChild(item)
+      })
+
+      elements.source.value = state.graphText || 'Waiting for graph data...'
+      elements.status.textContent =
+        nodes.length + ' nodes · ' +
+        edges.length + ' edges' +
+        (state.selectedNode ? ' · focusing on "' + state.selectedNode + '"' : '') +
+        (filterValue ? ' · filtered by "' + state.filter + '"' : '')
+    }
+
+    elements.search.addEventListener('input', (event) => {
+      state.filter = event.target.value
       render()
-    </script>
-  </body>
-  </html>`
-      },
+    })
+
+    elements.reset.addEventListener('click', () => {
+      state.filter = ''
+      state.selectedNode = ''
+      elements.search.value = ''
+      render()
+    })
+
+    window.addEventListener('message', (event) => {
+      if (event.data?.type === 'graph-update') {
+        state.graphText = event.data.graph || ''
+        render()
+      }
+    })
+
+    if (window.opener) {
+      window.opener.postMessage({ type: 'graph-viewer-ready' }, '*')
+    }
+
+    render()
+  </script>
+</body>
+</html>`,
       [],
     )
 
@@ -920,33 +916,36 @@ function App() {
     [socketUrlInput],
   )
 
-  const openGraphWindow = useCallback(() => {
-    const existingWindow = graphWindowRef.current
-    if (existingWindow && !existingWindow.closed) {
-      existingWindow.focus()
-      existingWindow.postMessage(
-        {
-          type: 'graph-update',
-          graph: graphSource,
-        },
-        '*',
-      )
-      return
-    }
+    const openGraphWindow = useCallback(() => {
+      const existingWindow = graphWindowRef.current
+      if (existingWindow && !existingWindow.closed) {
+        existingWindow.focus()
+        existingWindow.postMessage(
+          {
+            type: 'graph-update',
+            graph: graphSource,
+          },
+          '*',
+        )
+        return
+      }
 
-    const newWindow = window.open('', 'graph-viewer', 'width=960,height=720')
-    if (!newWindow) {
-      console.error('Unable to open graph viewer window. Check pop-up settings.')
-      return
-    }
+      const newWindow = window.open('', 'graph-viewer', 'width=960,height=720')
+      if (!newWindow) {
+        console.error('Unable to open graph viewer window. Check pop-up settings.')
+        return
+      }
 
-    const documentHandle = newWindow.document
-    documentHandle.open()
-    documentHandle.write(buildGraphWindowHtml(graphSource))
-    documentHandle.close()
-    newWindow.focus()
-    graphWindowRef.current = newWindow
-  }, [buildGraphWindowHtml, graphSource])
+      const graphAwareWindow = newWindow as Window & { initialGraph?: string }
+      graphAwareWindow.initialGraph = graphSource
+
+      const documentHandle = graphAwareWindow.document
+      documentHandle.open()
+      documentHandle.write(buildGraphWindowHtml())
+      documentHandle.close()
+      graphAwareWindow.focus()
+      graphWindowRef.current = graphAwareWindow
+    }, [buildGraphWindowHtml, graphSource])
 
   const clampGridScale = useCallback(
     (scale: number) => Math.min(MAX_GRID_SCALE, Math.max(MIN_GRID_SCALE, scale)),
