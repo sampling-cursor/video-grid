@@ -304,9 +304,12 @@ function App() {
   const annotationSessionTimeoutRef = useRef<number | null>(null)
   const graphWindowRef = useRef<Window | null>(null)
 
-  const buildGraphWindowHtml = useCallback(
-    (initialGraph: string) => `<!doctype html>
-<html lang="en">
+    const buildGraphWindowHtml = useCallback(
+      (initialGraph: string) => {
+        const encodedGraph = encodeURIComponent(initialGraph)
+
+        return `<!doctype html>
+  <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -357,8 +360,8 @@ function App() {
         <textarea id="source" readonly aria-label="Graph source"></textarea>
       </section>
     </main>
-    <script>
-      const state = { graphText: ${JSON.stringify(initialGraph)}, filter: '', selectedNode: '' }
+      <script>
+        const state = { graphText: decodeURIComponent(${JSON.stringify(encodedGraph)}), filter: '', selectedNode: '' }
 
       const elements = {
         search: document.getElementById('search'),
@@ -455,9 +458,10 @@ function App() {
       render()
     </script>
   </body>
-</html>`,
-    [],
-  )
+  </html>`
+      },
+      [],
+    )
 
   const publicKeysByVideoKey = useMemo(() => {
     const entries: Array<[string, string]> = []
