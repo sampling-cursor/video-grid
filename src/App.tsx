@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SyntheticEvent } from 'react'
-import YouTube from 'react-youtube'
-import type { YouTubeEvent, YouTubePlayer } from 'react-youtube'
 import './App.css'
 import { deriveNamespacePublicKey } from './hdWallet'
 
@@ -16,9 +14,12 @@ type PointOfInterest = {
   isReadOnly?: boolean
 }
 
-type VideoTrack = {
+type MediaKind = 'video' | 'document'
+
+type MediaTrack = {
   key: string
-  videoId: string
+  url: string
+  kind: MediaKind
   source: string
   namespace?: string
   points: PointOfInterest[]
@@ -36,7 +37,10 @@ const MIN_GRID_SCALE = 1
 const MAX_GRID_SCALE = 4
 const VISIBLE_POINT_WINDOW = 1.5
 
-const DEFAULT_VIDEO_IDS = ['tVlzKzKXjRw', 'aqz-KE-bpKQ', 'M7lc1UVf-VE']
+const DEFAULT_TRACKS: Array<{ url: string; kind: MediaKind }> = [
+  { url: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4', kind: 'video' },
+  { url: 'https://r.jina.ai/http://example.com/', kind: 'document' },
+]
 const DEFAULT_GRAPH_SOCKET_URL =
   'wss://ungallant-unimpeding-kade.ngrok-free.dev/00000000ef1ee3facd6972bcaf3e5859b7662ecb2ca208875df0106189eb740b'
 const GRAPH_SOCKET_PROTOCOLS = ['consequence.1']
@@ -44,44 +48,9 @@ const DEFAULT_GRAPH_REQUEST_PUBLIC_KEY = '00000000000000000000000000000000000000
 
 type GraphNode = Record<string, string>
 
-const extractVideoId = (value: string): string | null => {
-  const trimmed = value.trim()
-  if (!trimmed.length) {
-    return null
-  }
-
-  if (/^[\w-]{11}$/.test(trimmed)) {
-    return trimmed
-  }
-
-  try {
-    const url = new URL(trimmed)
-    if (url.hostname.includes('youtu.be')) {
-      const potentialId = url.pathname.split('/').filter(Boolean).at(-1)
-      if (potentialId && /^[\w-]{11}$/.test(potentialId)) {
-        return potentialId
-      }
-    }
-
-    if (url.hostname.includes('youtube.com')) {
-      const searchId = url.searchParams.get('v')
-      if (searchId && /^[\w-]{11}$/.test(searchId)) {
-        return searchId
-      }
-
-      const pathSegments = url.pathname.split('/').filter(Boolean)
-      const potentialId = pathSegments.at(-1)
-      if (potentialId && /^[\w-]{11}$/.test(potentialId)) {
-        return potentialId
-      }
-    }
-  } catch (error) {
-    // Ignore invalid URL parsing errors.
-  }
-
-  const inlineMatch = value.match(/[\w-]{11}/)
-  return inlineMatch ? inlineMatch[0] : null
-}
+const VIDEO_EXTENSIONS = ['.mp4', '.webm', '.ogg', '.mov', '.m3u8']
+const DOCUMENT_SCROLL_DURATION = 90
+const DOCUMENT_IFRAME_HEIGHT_MULTIPLIER = 3
 
 const formatTimecode = (seconds: number): string => {
   const wholeSeconds = Math.floor(seconds)
@@ -95,12 +64,29 @@ const formatTimecode = (seconds: number): string => {
   return `${minutes}:${paddedSeconds}.${paddedMilliseconds}`
 }
 
-const createVideoTrack = (videoId: string, source: string, namespace?: string): VideoTrack => {
+const inferMediaKind = (urlString: string): MediaKind => {
+  try {
+    const url = new URL(urlString)
+    const pathname = url.pathname.toLowerCase()
+    if (VIDEO_EXTENSIONS.some((extension) => pathname.endsWith(extension))) {
+      return 'video'
+    }
+  } catch (error) {
+    // Ignore parse failures and treat as document fallback.
+  }
+
+  return 'document'
+}
+
+const createMediaTrack = (url: string, source: string, kind?: MediaKind, namespace?: string): MediaTrack => {
   const keyBase = crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)
+  const resolvedKind = kind ?? inferMediaKind(url)
+
   return {
-    key: `video-${keyBase}`,
-    videoId,
+    key: `media-${keyBase}`,
+    url,
     source,
+    kind: resolvedKind,
     namespace,
     points: [],
   }
@@ -119,8 +105,8 @@ const parseGraphNodes = (dotGraph: string): GraphNode[] =>
     return parsedAttributes
   })
 
-const parseGraphVideos = (nodes: GraphNode[]): VideoTrack[] => {
-  const tracks: VideoTrack[] = []
+const parseGraphVideos = (nodes: GraphNode[]): MediaTrack[] => {
+  const tracks: MediaTrack[] = []
 
   nodes.forEach((node) => {
     const namespace = node.namespace?.trim()
@@ -130,9 +116,9 @@ const parseGraphVideos = (nodes: GraphNode[]): VideoTrack[] => {
       return
     }
 
-    const videoId = extractVideoId(memo)
-    if (videoId) {
-      tracks.push(createVideoTrack(videoId, memo, namespace))
+    const normalizedUrl = normalizeLinkHref(memo)
+    if (normalizedUrl) {
+      tracks.push(createMediaTrack(normalizedUrl, memo, inferMediaKind(normalizedUrl), namespace))
     }
   })
 
@@ -276,8 +262,8 @@ const normalizeSocketUrl = (value: string): string | null => {
 }
 
 function App() {
-  const [videos, setVideos] = useState<VideoTrack[]>(
-    DEFAULT_VIDEO_IDS.map((id) => createVideoTrack(id, `https://www.youtube.com/watch?v=${id}`)),
+  const [videos, setVideos] = useState<MediaTrack[]>(
+    DEFAULT_TRACKS.map((entry) => createMediaTrack(entry.url, entry.url, entry.kind)),
   )
   const [gridScale, setGridScale] = useState(1)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
@@ -297,10 +283,14 @@ function App() {
 
   const containerRefs = useRef(new Map<string, HTMLDivElement | null>())
   const overlayRefs = useRef(new Map<string, HTMLDivElement | null>())
-  const playerRefs = useRef(new Map<string, YouTubePlayer>())
+  const playerRefs = useRef(new Map<string, HTMLVideoElement | null>())
+  const documentRefs = useRef(new Map<string, HTMLIFrameElement | null>())
   const socketRef = useRef<WebSocket | null>(null)
   const requestedPublicKeysRef = useRef(new Set<string>())
   const annotationSessionTimeoutRef = useRef<number | null>(null)
+  const pausedKeysRef = useRef(new Set<string>())
+  const playbackStateRef = useRef<Record<string, PlaybackState>>({})
+  const documentStartRef = useRef<number | null>(null)
 
   const publicKeysByVideoKey = useMemo(() => {
     const entries: Array<[string, string]> = []
@@ -315,21 +305,9 @@ function App() {
     return new Map(entries)
   }, [videos])
 
-  const baseYouTubeOptions = useMemo(
-    () => ({
-      width: '100%',
-      height: '100%',
-      playerVars: {
-        controls: 0,
-        modestbranding: 1,
-        rel: 0,
-        playsinline: 1,
-        fs: 0,
-        loop: 1,
-      },
-    }),
-    [],
-  )
+  useEffect(() => {
+    playbackStateRef.current = playbackStates
+  }, [playbackStates])
 
   const rows = useMemo(() => GRID_ASPECT_HEIGHT * gridScale, [gridScale])
   const columns = useMemo(() => GRID_ASPECT_WIDTH * gridScale, [gridScale])
@@ -366,6 +344,11 @@ function App() {
         playerRefs.current.delete(key)
       }
     })
+    documentRefs.current.forEach((_, key) => {
+      if (!allKeys.has(key)) {
+        documentRefs.current.delete(key)
+      }
+    })
     overlayRefs.current.forEach((_, key) => {
       if (!allKeys.has(key)) {
         overlayRefs.current.delete(key)
@@ -374,8 +357,13 @@ function App() {
     setPlaybackStates((previous) => {
       const next: Record<string, PlaybackState> = {}
       allKeys.forEach((key) => {
-        if (previous[key]) {
-          next[key] = previous[key]
+        const track = videos.find((video) => video.key === key)
+        const previousState = previous[key]
+
+        if (track?.kind === 'document') {
+          next[key] = previousState ?? { currentTime: 0, duration: DOCUMENT_SCROLL_DURATION }
+        } else if (previousState) {
+          next[key] = previousState
         }
       })
       return next
@@ -435,13 +423,27 @@ function App() {
 
   useEffect(() => {
     playerRefs.current.forEach((player, key) => {
-      if (key === activeVideoKey) {
-        player.playVideo?.()
+      if (!player) {
+        return
+      }
+
+      if (key === activeVideoKey && !pausedKeysRef.current.has(key)) {
+        player.play().catch(() => undefined)
       } else {
-        player.pauseVideo?.()
+        player.pause()
       }
     })
-  }, [activeVideoKey])
+
+    if (!activeVideoKey) {
+      documentStartRef.current = null
+      return
+    }
+
+    const activeTrack = videos.find((video) => video.key === activeVideoKey)
+    if (activeTrack?.kind === 'document' && pausedKeysRef.current.has(activeVideoKey)) {
+      documentStartRef.current = null
+    }
+  }, [activeVideoKey, videos])
 
   useEffect(() => {
     const handlePageHide = () => setIsAnnotationSessionActive(false)
@@ -459,36 +461,59 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!activeVideoKey) {
-      return undefined
-    }
-
     let frameId: number
 
-    const update = () => {
-      const player = playerRefs.current.get(activeVideoKey)
-      if (player) {
-        const currentTime = player.getCurrentTime?.() ?? 0
-        const duration = player.getDuration?.() ?? 0
+    const update = (timestamp: number) => {
+      const activeTrack = videos.find((video) => video.key === activeVideoKey)
 
-        setPlaybackStates((previous) => {
-          const previousState = previous[activeVideoKey]
-          if (
-            !previousState ||
-            Math.abs(previousState.currentTime - currentTime) > 0.05 ||
-            Math.abs(previousState.duration - duration) > 0.1
-          ) {
-            return {
-              ...previous,
-              [activeVideoKey]: {
-                currentTime,
-                duration,
-              },
+      if (activeTrack?.kind === 'video') {
+        documentStartRef.current = null
+        const player = activeTrack.key ? playerRefs.current.get(activeTrack.key) : null
+        if (player) {
+          const currentTime = player.currentTime ?? 0
+          const duration = Number.isFinite(player.duration) ? player.duration : 0
+
+          setPlaybackStates((previous) => {
+            const previousState = previous[activeTrack.key]
+            if (
+              !previousState ||
+              Math.abs(previousState.currentTime - currentTime) > 0.05 ||
+              Math.abs(previousState.duration - duration) > 0.1
+            ) {
+              return {
+                ...previous,
+                [activeTrack.key]: {
+                  currentTime,
+                  duration,
+                },
+              }
             }
+
+            return previous
+          })
+        }
+      } else if (activeTrack?.kind === 'document') {
+        const duration = playbackStateRef.current[activeTrack.key]?.duration ?? DOCUMENT_SCROLL_DURATION
+
+        if (pausedKeysRef.current.has(activeTrack.key)) {
+          documentStartRef.current = null
+        } else {
+          const previousTime = playbackStateRef.current[activeTrack.key]?.currentTime ?? 0
+          const startTimestamp = documentStartRef.current ?? timestamp - previousTime * 1000
+          let elapsed = (timestamp - startTimestamp) / 1000
+
+          if (elapsed >= duration) {
+            elapsed = 0
+            documentStartRef.current = timestamp
+          } else {
+            documentStartRef.current = startTimestamp
           }
 
-          return previous
-        })
+          setPlaybackStates((previous) => ({
+            ...previous,
+            [activeTrack.key]: { currentTime: elapsed, duration },
+          }))
+        }
       }
 
       frameId = requestAnimationFrame(update)
@@ -499,7 +524,7 @@ function App() {
     return () => {
       cancelAnimationFrame(frameId)
     }
-  }, [activeVideoKey])
+  }, [activeVideoKey, videos])
 
   const registerContainerRef = useCallback(
     (key: string) =>
@@ -517,35 +542,20 @@ function App() {
     [],
   )
 
-  const handlePlayerReady = useCallback(
+  const registerVideoRef = useCallback(
     (key: string) =>
-      (event: YouTubeEvent) => {
-        const player = event.target
-        player.mute()
-        playerRefs.current.set(key, player)
-
-        if (key === activeVideoKey) {
-          player.playVideo?.()
-        } else {
-          player.pauseVideo?.()
-        }
+      (node: HTMLVideoElement | null) => {
+        playerRefs.current.set(key, node)
       },
-    [activeVideoKey],
+    [],
   )
 
-  const handleVideoEnd = useCallback(
+  const registerDocumentRef = useCallback(
     (key: string) =>
-      (event: YouTubeEvent) => {
-        const player = event.target
-        player.seekTo?.(0)
-
-        if (key === activeVideoKey) {
-          player.playVideo?.()
-        } else {
-          player.pauseVideo?.()
-        }
+      (node: HTMLIFrameElement | null) => {
+        documentRefs.current.set(key, node)
       },
-    [activeVideoKey],
+    [],
   )
 
   const handleCalloutInteraction = useCallback((event: SyntheticEvent<HTMLElement>) => {
@@ -559,13 +569,15 @@ function App() {
     (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault()
 
-      const id = extractVideoId(videoInput)
-      if (!id) {
-        setVideoError('Enter a valid YouTube URL or 11-character video ID.')
+      const normalizedUrl = normalizeLinkHref(videoInput)
+      if (!normalizedUrl) {
+        setVideoError('Enter a valid URL (http or https) to add to the feed.')
         return
       }
 
-      setVideos((previous) => [createVideoTrack(id, videoInput), ...previous])
+      const track = createMediaTrack(normalizedUrl, videoInput || normalizedUrl, inferMediaKind(normalizedUrl))
+
+      setVideos((previous) => [track, ...previous])
       setVideoInput('')
       setVideoError(null)
     },
@@ -575,6 +587,7 @@ function App() {
   const handleRemoveVideo = useCallback(
     (key: string) => {
       setVideos((previous) => previous.filter((video) => video.key !== key))
+      pausedKeysRef.current.delete(key)
       setEditingPoint((previous) => {
         if (previous && previous.videoKey === key) {
           return null
@@ -800,34 +813,64 @@ function App() {
     [logVideoPoints],
   )
 
-  const resumeVideoIfNeeded = useCallback(
+  const pauseTrack = useCallback(
     (videoKey: string) => {
-      const player = playerRefs.current.get(videoKey)
-      if (player && activeVideoKey === videoKey) {
-        player.playVideo?.()
+      const track = videos.find((video) => video.key === videoKey)
+      if (!track) {
+        return
+      }
+
+      pausedKeysRef.current.add(videoKey)
+
+      if (track.kind === 'video') {
+        const player = playerRefs.current.get(videoKey)
+        player?.pause()
       }
     },
-    [activeVideoKey],
+    [videos],
   )
 
-  const startEditingPoint = useCallback((videoKey: string, pointId: string) => {
-    const player = playerRefs.current.get(videoKey)
-    player?.pauseVideo?.()
-    setEditingPoint({ videoKey, pointId })
-  }, [])
+  const resumeTrack = useCallback(
+    (videoKey: string) => {
+      const track = videos.find((video) => video.key === videoKey)
+      if (!track) {
+        return
+      }
+
+      pausedKeysRef.current.delete(videoKey)
+
+      if (track.kind === 'video') {
+        const player = playerRefs.current.get(videoKey)
+        if (player && activeVideoKey === videoKey) {
+          player.play().catch(() => undefined)
+        }
+      } else if (track.kind === 'document' && activeVideoKey === videoKey) {
+        documentStartRef.current = null
+      }
+    },
+    [activeVideoKey, videos],
+  )
+
+  const startEditingPoint = useCallback(
+    (videoKey: string, pointId: string) => {
+      pauseTrack(videoKey)
+      setEditingPoint({ videoKey, pointId })
+    },
+    [pauseTrack],
+  )
 
   const stopEditingPoint = useCallback(
     (videoKey: string, pointId: string) => {
       setEditingPoint((previous) => {
         if (previous && previous.videoKey === videoKey && previous.pointId === pointId) {
-          resumeVideoIfNeeded(videoKey)
+          resumeTrack(videoKey)
           return null
         }
 
         return previous
       })
     },
-    [resumeVideoIfNeeded],
+    [resumeTrack],
   )
 
   const registerPoint = useCallback(
@@ -837,13 +880,8 @@ function App() {
           return
         }
 
-        const player = playerRefs.current.get(videoKey)
-        if (!player) {
-          return
-        }
-
         const overlay = overlayRefs.current.get(videoKey)
-        const currentTime = player.getCurrentTime?.() ?? 0
+        const currentTime = playbackStates[videoKey]?.currentTime ?? 0
         const overlayRect = overlay?.getBoundingClientRect()
         const clickX = event.clientX
         const clickY = event.clientY
@@ -888,7 +926,7 @@ function App() {
 
         startEditingPoint(videoKey, id)
       },
-    [columns, rows, logVideoPoints, startEditingPoint, isAnnotationInteractionEnabled],
+    [columns, rows, logVideoPoints, startEditingPoint, isAnnotationInteractionEnabled, playbackStates],
   )
 
   const gridCellsForVideo = useCallback(
@@ -930,6 +968,13 @@ function App() {
           const progressPercent = playback.duration
             ? Math.min(100, Math.max(0, (playback.currentTime / playback.duration) * 100))
             : 0
+          const documentScrollPercent =
+            video.kind === 'document' && playback.duration > 0
+              ? Math.min(
+                  Math.max(0, (playback.currentTime / playback.duration) * (DOCUMENT_IFRAME_HEIGHT_MULTIPLIER - 1) * 100),
+                  (DOCUMENT_IFRAME_HEIGHT_MULTIPLIER - 1) * 100,
+                )
+              : 0
 
           return (
             <section
@@ -969,20 +1014,32 @@ function App() {
 
               <div className="video-stage">
                 <div className="video-stage__frame" style={{ paddingTop: GRID_PADDING_PERCENT }}>
-                  <YouTube
-                    videoId={video.videoId}
-                    opts={{
-                      ...baseYouTubeOptions,
-                      playerVars: {
-                        ...(baseYouTubeOptions.playerVars ?? {}),
-                        playlist: video.videoId,
-                      },
-                    }}
-                    onReady={handlePlayerReady(video.key)}
-                    onEnd={handleVideoEnd(video.key)}
-                    className="video-stage__player"
-                    iframeClassName="video-stage__player"
-                  />
+                  {video.kind === 'video' ? (
+                    <video
+                      ref={registerVideoRef(video.key)}
+                      className="video-stage__player"
+                      src={video.url}
+                      muted
+                      loop
+                      playsInline
+                    />
+                  ) : (
+                    <div className="video-stage__player video-stage__document-shell">
+                      <div
+                        className="video-stage__document-inner"
+                        style={{ transform: `translateY(-${documentScrollPercent}%)` }}
+                      >
+                        <iframe
+                          ref={registerDocumentRef(video.key)}
+                          className="video-stage__document-frame"
+                          src={video.url}
+                          title={`Document ${video.source}`}
+                          sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+                          style={{ height: `${DOCUMENT_IFRAME_HEIGHT_MULTIPLIER * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div
                   ref={registerOverlayRef(video.key)}
@@ -1158,14 +1215,14 @@ function App() {
           </section>
 
           <section className="drawer__section">
-            <h3>Add a video</h3>
+            <h3>Add a source</h3>
             <form className="drawer__form" onSubmit={handleAddVideo}>
               <label className="field">
-                <span className="field__label">YouTube URL or ID</span>
+                <span className="field__label">Any URL</span>
                 <input
                   value={videoInput}
                   onChange={(event) => setVideoInput(event.target.value)}
-                  placeholder="https://www.youtube.com/shorts/..."
+                  placeholder="https://example.com/document or https://cdn.site/video.mp4"
                   className={videoError ? 'field__input field__input--error' : 'field__input'}
                   aria-invalid={videoError ? 'true' : 'false'}
                 />
@@ -1176,7 +1233,7 @@ function App() {
                 </p>
               ) : null}
               <button type="submit" className="button primary">
-                Add video to feed
+                Add to feed
               </button>
             </form>
           </section>
@@ -1229,7 +1286,7 @@ function App() {
                 ))}
               </ul>
             ) : (
-              <p className="drawer__empty">Add a YouTube Short to get started.</p>
+              <p className="drawer__empty">Add a URL to get started.</p>
             )}
           </section>
         </aside>
